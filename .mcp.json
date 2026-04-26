@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shopme": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["host/dist/index.js"],
+      "cwd": "c:\\dev\\shopme"
+    }
+  }
+}
