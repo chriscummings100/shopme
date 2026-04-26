@@ -20,24 +20,6 @@ const extensionPopup = {
   sourcemap: true,
 };
 
-const extensionInterceptor = {
-  entryPoints: ['extension/src/interceptor.ts'],
-  bundle: true,
-  outfile: 'extension/dist/interceptor.js',
-  format: 'iife',
-  target: 'chrome120',
-  sourcemap: true,
-};
-
-const extensionContent = {
-  entryPoints: ['extension/src/content.ts'],
-  bundle: true,
-  outfile: 'extension/dist/content.js',
-  format: 'iife',
-  target: 'chrome120',
-  sourcemap: true,
-};
-
 const host = {
   entryPoints: ['host/src/index.ts'],
   bundle: true,
@@ -52,7 +34,7 @@ const host = {
   },
 };
 
-const all = [extensionBackground, extensionPopup, extensionInterceptor, extensionContent, host];
+const all = [extensionBackground, extensionPopup, host];
 
 if (watch) {
   const contexts = await Promise.all(all.map(c => esbuild.context(c)));

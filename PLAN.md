@@ -18,16 +18,16 @@ AI-powered shopping assistant for Waitrose, built as a Chrome/Edge extension tha
 
 ### Components
 
-1. **Chrome Extension (Manifest V3)** — Service worker + content scripts. Provides auth/cookies, intercepts network traffic, and navigates the browser for visual feedback. Connects to the host via WebSocket.
+1. **Chrome Extension (Manifest V3)** — Stateless service worker. Provides auth cookies, navigates the browser for visual feedback, relays commands from the host. Holds no state — service workers are terminated by Chrome without warning.
 
-2. **MCP Server / Host (Node.js)** — Single process that serves both the MCP protocol (stdio, for Claude) and a WebSocket server (localhost:18321, for the extension). Makes direct API calls to Waitrose using captured auth credentials.
+2. **MCP Server / Host (Node.js)** — Single stable process serving MCP over stdio (for Claude) and WebSocket on localhost:18321 (for the extension). Makes direct HTTP/GraphQL calls to Waitrose using auth credentials obtained from the extension.
 
 ### Core Principles
 
-- **API-first**: The agent interacts with Waitrose primarily through their JSON APIs, using session credentials from the browser. This avoids limitations of DOM scraping (pagination, scroll-to-load, etc.).
-- **Browser as visual feedback**: The browser navigates in parallel to show the user what's happening — a dashboard, not the primary data path.
-- **MCP as the interface**: Any MCP-compatible AI agent can drive this.
-- **WebSocket for extension ↔ host**: Simpler than Native Messaging (no host registration), avoids the stdio conflict (MCP already uses stdio). Localhost-only, single-client.
+- **API-first**: Agent interacts with Waitrose via their JSON/GraphQL APIs directly. Browser navigation is visual feedback only — not a data source.
+- **Extension is stateless**: All state lives in the host process. The extension just relays and provides credentials.
+- **MCP as the interface**: Any MCP-compatible agent can drive this.
+- **WebSocket over Native Messaging**: No host registration needed; avoids stdio conflict with MCP protocol.
 
 ## Tech Stack
 
@@ -36,77 +36,186 @@ AI-powered shopping assistant for Waitrose, built as a Chrome/Edge extension tha
 | Extension | TypeScript, Manifest V3, Chrome APIs |
 | MCP Server / Host | Node.js / TypeScript, `@modelcontextprotocol/sdk`, `ws` |
 | Build | esbuild |
-| Testing | Vitest + Playwright |
 
-## Phases
+## Waitrose API Reference
 
-### Phase 1: Scaffold, Messaging & API Discovery
+Discovered via Chrome DevTools HAR export. Base URL: `https://www.waitrose.com`.
 
-Extension skeleton:
-- Manifest V3 with permissions for `*.waitrose.com`
-- Service worker connects to host via WebSocket (localhost:18321)
-- Basic popup showing connection status
+All authenticated endpoints require:
+- `Authorization: Bearer <jwt>` header
+- Customer ID embedded in some URLs (e.g. `705796347`)
+- Order ID for trolley/basket operations (e.g. `1066251787`) — this is the current pending order
 
-MCP host process:
-- Node.js process serving MCP over stdio and WebSocket for the extension
-- Bidirectional request/response messaging with the extension
-- MCP tools: `ping`, `navigate`, `start_capture`, `stop_capture`, `get_captured_traffic`, `get_cookies`
+### Auth Flow
 
-API discovery tools (built into the extension from day one):
-- Network interception via `chrome.webRequest` — observe all requests to Waitrose
-- `start_capture` / `stop_capture` — toggle traffic recording
-- `get_captured_traffic` — return captured API calls (URLs, methods, headers, response shapes)
-- `navigate` — navigate the Waitrose tab to a URL (for driving discovery)
+1. `GET /api/token-client-prod/v1/csrf`
+   - No auth required
+   - Returns a CSRF token
 
-This phase gives us the research tool for understanding Waitrose's API, which informs everything that follows.
+2. `POST /api/token-client-prod/v1/token`
+   - Header: `X-CSRF-TOKEN: <token from step 1>`
+   - Returns a Bearer JWT (expires ~15 minutes)
+   - JWT contains `customerId`, `customerEmail`, `clientId`
 
-### Phase 2: Auth & Direct API Access
+JWT is then used as `Authorization: Bearer <jwt>` on all subsequent requests.
 
-- `get_auth_status` — check if user is logged in (from cookies/page state)
-- `get_session` — extract cookies and auth tokens needed for direct API calls
-- Proxy mechanism in the native host: make `fetch` calls to Waitrose APIs using captured auth headers
-- `api_call` — generic tool for making authenticated requests to discovered endpoints
+### Product Search
 
-### Phase 3: Product Search & Details
+`POST /api/content-prod/v2/cms/publish/productcontent/search/{customerId}?clientType=WEB_APP`
 
-- `search_products` — hit Waitrose search API directly, full pagination support
-- `get_product_details` — get details for a specific product
-- Browser navigates to search results page as visual feedback
-- Map out product data model (IDs, prices, availability, images)
+Request body:
+```json
+{
+  "customerSearchRequest": {
+    "queryParams": {
+      "size": 48,
+      "searchTerm": "milk",
+      "sortBy": "RELEVANCE",
+      "searchTags": [],
+      "filterTags": [],
+      "orderId": "1066251787",
+      "categoryLevel": 1
+    }
+  }
+}
+```
+
+Sort values: `RELEVANCE`, `MOST_POPULAR`, `A_2_Z`, `PRICE_HIGH_TO_LOW`, `PRICE_LOW_TO_HIGH`
+
+Response includes: product list with `lineNumber`, `productId`, name, price, availability.
+
+Product IDs follow the pattern `{lineNumber}-{variantId1}-{variantId2}` e.g. `085519-43604-43605`.
+
+### Search Autocomplete
+
+`GET /api/term-suggest-prod/v1/term-suggest/terms?term=mil`
+
+No auth required. Returns suggested search terms.
+
+### Trolley — Get
+
+`POST /api/graphql-prod/graph/live?clientType=WEB_APP&tag=get-trolley`
+
+```graphql
+query getTrolley($orderId: ID!) {
+  getTrolley(orderId: $orderId) { ... }
+}
+```
+Variables: `{ "orderId": "1066251787" }`
+
+Response: full trolley with `trolleyItems[]` (each has `lineNumber`, `productId`, `trolleyItemId`, `quantity`), `trolleyTotals`, `conflicts[]`.
+
+### Trolley — Add Item
+
+`POST /api/graphql-prod/graph/live?clientType=WEB_APP&tag=add-item`
+
+```graphql
+mutation addItemToTrolley($orderId: ID!, $trolleyItem: TrolleyItemInput!) {
+  addItemToTrolley(orderId: $orderId, trolleyItem: $trolleyItem) { trolley { ... } }
+}
+```
+Variables:
+```json
+{
+  "orderId": "1066251787",
+  "trolleyItem": {
+    "lineNumber": "085519",
+    "productId": "085519-43604-43605",
+    "quantity": { "amount": 1, "uom": "C62" },
+    "trolleyItemId": -85519
+  }
+}
+```
+
+The `trolleyItemId` for a **new** item is the **negative of its `lineNumber`**. The server assigns a real positive ID on success, returned in the response.
+
+### Trolley — Update / Remove Item
+
+`POST /api/graphql-prod/graph/live?clientType=WEB_APP&tag=update-trolley-item`
+
+Same shape as add-item, but:
+- `trolleyItemId` is the **real positive ID** from the server (from getTrolley response)
+- Set `quantity.amount: 0` to remove the item
+
+### Order History
+
+Active/upcoming orders:
+`GET /api/order-orchestration-prod/v1/orders?size=15&sortBy=%2B&statuses=AMENDING%2BFULFIL%2BPAID%2BPAYMENT_FAILED%2BPICKED%2BPLACED`
+
+Past orders:
+`GET /api/order-orchestration-prod/v1/orders?size=15&statuses=COMPLETED%2BCANCELLED%2BREFUND_PENDING`
+
+### Favourites
+
+`GET /api/favourites2-prod/v2/favourites?includes=bought-online%2Cuser-selected&lastPurchase=gte%3A2025-03-26`
+
+Favourites for current order (used for "shop from favourites" view):
+`GET /api/favourites-experience-prod/v1/favourites/{orderId}?includes=bought-online%2Cuser-selected&size=48&sortBy=CATEGORY`
+
+### Other Endpoints Observed
+
+- `GET /api/delivery-pass-orchestration-prod/v1/pass/status` — delivery pass status
+- `GET /api/slot-orchestration-prod/v1/slot-reservations?customerOrderId={orderId}` — delivery slot
+- `GET /api/memberships-prod/v2/memberships` — MyWaitrose membership
+- `GET /api/shopping-context-prod/v1/shopping-context` — current shopping context (includes orderId)
+
+---
+
+## Progress
+
+### Phase 1: Scaffold, Messaging & API Discovery — COMPLETE
+
+- Chrome extension (MV3): stateless service worker, connects to host via WebSocket, navigates browser, provides cookies
+- MCP host: stdio MCP server + WebSocket bridge, launched automatically by Claude Code via `.mcp.json`
+- `load_har` / `query_har` tools for analysing DevTools HAR exports
+- API fully mapped via HAR capture (see above)
+- Build pipeline: esbuild for extension (iife) + host (esm with CJS shim for `ws`)
+- Key fix: esbuild CJS-in-ESM shim needed for `ws` package
+
+### Phase 2: Auth & Direct API Access — NEXT
+
+Goals:
+- `get_session` tool: CSRF → Bearer JWT, returns ready-to-use auth headers
+- `get_shopping_context` tool: returns current `customerId`, `orderId`
+- `api_call` tool: generic authenticated request (for exploration/debugging)
+- Store session in host memory, auto-refresh when JWT expires (~15 min)
+
+### Phase 3: Product Search
+
+- `search_products` — full pagination, all results via direct API
+- `get_autocomplete` — term suggestions
+- Browser navigates to search page as visual confirmation
 
 ### Phase 4: Basket Management
 
-- `add_to_basket` — add a product with quantity via API
-- `remove_from_basket` — remove item via API
-- `view_basket` — return current basket contents
-- `update_quantity` — change quantity of an item
-- Browser reflects basket state visually
-- `checkout_summary` — totals, delivery slot info (read-only, no auto-checkout)
+- `get_trolley` — current basket contents and totals
+- `add_to_basket` — add by lineNumber + productId + quantity
+- `update_quantity` — change quantity of existing item
+- `remove_from_basket` — set quantity to 0
+- Browser navigates to trolley page as visual confirmation
 
 ### Phase 5: Order History
 
-- `get_previous_orders` — list past orders with dates
-- `get_order_details` — items from a specific past order
-- `reorder_items` — add items from a previous order to current basket
+- `get_orders` — active and past orders
+- `get_order_details` — items from a specific order
+- `reorder` — add all items from a past order to current basket
 
 ### Phase 6: Shopping List OCR
 
-- `parse_shopping_list` — accepts an image, extracts items using Claude's vision
-- Returns structured list of items with quantities
-- Feeds directly into search → add-to-basket workflow
+- `parse_shopping_list` — photo → structured item list using Claude vision
+- Feeds directly into search → add_to_basket workflow
 
 ### Phase 7: Agent Workflow Integration
 
-- Higher-level composed workflows ("do my weekly shop from this photo")
-- Confirmation gates before checkout
-- Error recovery: item not found → suggest alternatives from search results
-- Smart matching: fuzzy product matching, preferred brands, usual quantities from order history
+- Composed workflows: "do my weekly shop from this photo"
+- Smart matching: preferred brands, usual quantities from order history
+- Confirmation gates before any checkout action
+- Error recovery: out of stock → suggest alternatives
 
 ## Testing Strategy
 
-- **Extension debugging**: Load unpacked via `chrome://extensions`, service worker DevTools console
-- **Host process**: Run standalone with mocked WebSocket messages for unit tests
-- **MCP server**: Claude Code itself as the test client — we're building tools it can call
-- **API discovery**: The capture tools double as our research and regression tool — if Waitrose changes an API, we can re-capture and diff
-- **E2E**: Playwright with `--load-extension` to verify the full chain
-- **VS Code**: Launch configs for debugging the native host with breakpoints
+- **Extension**: Load unpacked in `chrome://extensions`, inspect service worker via DevTools
+- **Host**: Run standalone (`npm run dev:host`), test tools directly from Claude Code
+- **MCP**: Claude Code is the test client — call tools directly in conversation
+- **HAR regression**: Re-export HAR after Waitrose updates to detect API changes
+- **E2E**: Playwright with `--load-extension` for full chain verification
