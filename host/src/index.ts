@@ -3,6 +3,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { WebSocketServer, WebSocket } from 'ws';
 import { z } from 'zod';
 
+process.on('uncaughtException', (err) => {
+  console.error('[shopme] Uncaught exception (keeping process alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[shopme] Unhandled rejection (keeping process alive):', reason);
+});
+
 const WS_PORT = 18321;
 
 // --- Extension connection ---
@@ -14,9 +21,13 @@ const pendingRequests = new Map<
 >();
 
 const wss = new WebSocketServer({ port: WS_PORT });
+wss.on('error', (err) => console.error('[shopme] WebSocket server error:', err));
 
 setInterval(() => {
-  if (extensionWs?.readyState === WebSocket.OPEN) extensionWs.ping();
+  console.error('[shopme] Keepalive tick, ws state:', extensionWs?.readyState ?? 'null');
+  if (extensionWs?.readyState === WebSocket.OPEN) {
+    sendToExtension('ping').catch((e) => console.error('[shopme] Keepalive ping failed:', e.message));
+  }
 }, 25_000);
 
 wss.on('connection', (ws) => {
@@ -56,7 +67,7 @@ function sendToExtension(type: string, data?: unknown): Promise<any> {
     const timeout = setTimeout(() => {
       pendingRequests.delete(id);
       reject(new Error('Request to extension timed out'));
-    }, 30_000);
+    }, 60_000);
     pendingRequests.set(id, {
       resolve: (data) => { clearTimeout(timeout); resolve(data); },
       reject: (err) => { clearTimeout(timeout); reject(err); },
@@ -74,7 +85,7 @@ async function tabFetch(method: string, path: string, body?: string): Promise<{ 
 
 const server = new McpServer({ name: 'shopme', version: '0.1.0' });
 
-server.tool('ping', 'Check if the browser extension is connected and responding', {}, async () => {
+server.registerTool('ping', { description: 'Check if the browser extension is connected and responding' }, async () => {
   try {
     await sendToExtension('ping');
     return { content: [{ type: 'text' as const, text: 'Extension is connected and responding.' }] };
@@ -83,10 +94,9 @@ server.tool('ping', 'Check if the browser extension is connected and responding'
   }
 });
 
-server.tool(
+server.registerTool(
   'navigate',
-  'Navigate the browser to a URL on waitrose.com.',
-  { url: z.string().describe('Full URL to navigate to') },
+  { description: 'Navigate the browser to a URL on waitrose.com.', inputSchema: { url: z.string().describe('Full URL to navigate to') } },
   async ({ url }) => {
     try {
       await sendToExtension('navigate', { url });
@@ -97,10 +107,9 @@ server.tool(
   }
 );
 
-server.tool(
+server.registerTool(
   'get_shopping_context',
-  'Get customerId and active orderId from the Waitrose tab localStorage. Call this before basket or search operations.',
-  {},
+  { description: 'Get customerId and active orderId from the Waitrose tab localStorage. Call this before basket or search operations.' },
   async () => {
     try {
       const result = await sendToExtension('get_storage');
@@ -119,13 +128,15 @@ server.tool(
   }
 );
 
-server.tool(
+server.registerTool(
   'search_products',
-  'Search for products on Waitrose. Returns id, lineNumber, name, size, price, and any active promotions.',
   {
-    searchTerm: z.string().describe('Search query, e.g. "semi-skimmed milk"'),
-    size: z.number().int().min(1).max(48).default(10).describe('Number of results to return'),
-    sortBy: z.enum(['MOST_POPULAR', 'PRICE_LOW_TO_HIGH', 'PRICE_HIGH_TO_LOW', 'RATING']).default('MOST_POPULAR'),
+    description: 'Search for products on Waitrose. Returns id, lineNumber, name, size, price, and any active promotions.',
+    inputSchema: {
+      searchTerm: z.string().describe('Search query, e.g. "semi-skimmed milk"'),
+      size: z.number().int().min(1).max(48).default(10).describe('Number of results to return'),
+      sortBy: z.enum(['MOST_POPULAR', 'PRICE_LOW_TO_HIGH', 'PRICE_HIGH_TO_LOW', 'RATING']).default('MOST_POPULAR'),
+    },
   },
   async ({ searchTerm, size, sortBy }) => {
     try {
@@ -170,14 +181,198 @@ server.tool(
   }
 );
 
-server.tool(
-  'add_to_basket',
-  'Add a product to the Waitrose basket. Use lineNumber and id from search_products results.',
+server.registerTool(
+  'get_trolley',
+  { description: 'Get current basket contents including trolleyItemId (needed for remove/update), quantity, price per item, and totals.' },
+  async () => {
+    try {
+      const ctx = await sendToExtension('get_storage');
+      const orderId: string = ctx.local?.wtr_order_id ?? '';
+      if (!orderId) throw new Error('No active order');
+
+      const result = await tabFetch(
+        'POST',
+        '/api/graphql-prod/graph/live?clientType=WEB_APP&tag=get-trolley',
+        JSON.stringify({
+          query: `query($orderId: ID!) {
+            getTrolley(orderId: $orderId) {
+              products {
+                lineNumber name size displayPrice displayPriceQualifier
+                promotions { promotionDescription }
+              }
+              trolley {
+                trolleyItems {
+                  trolleyItemId lineNumber productId
+                  quantity { amount uom }
+                  totalPrice { amount currencyCode }
+                }
+                trolleyTotals {
+                  itemTotalEstimatedCost { amount currencyCode }
+                  totalEstimatedCost { amount currencyCode }
+                  savingsFromOffers { amount currencyCode }
+                }
+              }
+            }
+          }`,
+          variables: { orderId },
+        }),
+      );
+
+      const data = JSON.parse(result.body);
+      const getTrolley = data?.data?.getTrolley;
+      const trolley = getTrolley?.trolley;
+      if (!trolley) throw new Error('No trolley data returned');
+
+      const productMap = new Map<string, any>();
+      for (const p of getTrolley?.products ?? []) {
+        productMap.set(p.lineNumber, p);
+      }
+
+      const items = (trolley.trolleyItems ?? []).map((i: any) => {
+        const p = productMap.get(i.lineNumber);
+        return {
+          trolleyItemId: i.trolleyItemId,
+          lineNumber: i.lineNumber,
+          productId: i.productId,
+          name: p?.name ?? null,
+          size: p?.size ?? null,
+          price: p?.displayPrice ?? null,
+          pricePerUnit: p?.displayPriceQualifier ?? null,
+          promotion: p?.promotions?.[0]?.promotionDescription ?? null,
+          quantity: i.quantity.amount,
+          uom: i.quantity.uom,
+          totalPrice: `£${i.totalPrice.amount.toFixed(2)}`,
+        };
+      });
+
+      const totals = trolley.trolleyTotals;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            items,
+            itemTotal: `£${totals.itemTotalEstimatedCost.amount.toFixed(2)}`,
+            savings: totals.savingsFromOffers.amount > 0 ? `£${totals.savingsFromOffers.amount.toFixed(2)}` : null,
+          }, null, 2),
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `get_trolley failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  'update_quantity',
   {
-    lineNumber: z.string().describe('Product line number, e.g. "053457"'),
-    productId: z.string().describe('Product id, e.g. "053457-26759-26760"'),
-    quantity: z.number().int().min(1).default(1),
-    uom: z.string().default('C62').describe('Unit of measure from search results'),
+    description: 'Change the quantity of an item already in the basket. Get trolleyItemId, lineNumber, productId and uom from get_trolley first.',
+    inputSchema: {
+      trolleyItemId: z.number().int().describe('trolleyItemId from get_trolley'),
+      lineNumber: z.string(),
+      productId: z.string(),
+      quantity: z.number().int().min(1),
+      uom: z.string().default('C62'),
+    },
+  },
+  async ({ trolleyItemId, lineNumber, productId, quantity, uom }) => {
+    try {
+      const ctx = await sendToExtension('get_storage');
+      const orderId: string = ctx.local?.wtr_order_id ?? '';
+      if (!orderId) throw new Error('No active order');
+
+      const body = JSON.stringify({
+        query: `mutation($orderId: ID!, $trolleyItem: TrolleyItemInput) {
+          updateTrolleyItem(orderId: $orderId, trolleyItem: $trolleyItem) {
+            trolley {
+              trolleyTotals { itemTotalEstimatedCost { amount currencyCode } }
+            }
+            failures { message type }
+          }
+        }`,
+        variables: {
+          orderId,
+          trolleyItem: { trolleyItemId, lineNumber, productId, quantity: { amount: quantity, uom }, canSubstitute: true, personalisedMessage: null },
+        },
+      });
+
+      const result = await tabFetch('POST', '/api/graphql-prod/graph/live?clientType=WEB_APP&tag=updateTrolleyItem', body);
+      const data = JSON.parse(result.body);
+      const failures = data?.data?.updateTrolleyItem?.failures ?? [];
+      if (failures.length) throw new Error(failures.map((f: any) => f.message).join(', '));
+
+      const total = data?.data?.updateTrolleyItem?.trolley?.trolleyTotals?.itemTotalEstimatedCost;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({ ok: true, basketTotal: total ? `£${total.amount.toFixed(2)}` : null }),
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `update_quantity failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  'remove_from_basket',
+  {
+    description: 'Remove an item from the basket entirely. Get trolleyItemId, lineNumber, productId and uom from get_trolley first.',
+    inputSchema: {
+      trolleyItemId: z.number().int().describe('trolleyItemId from get_trolley'),
+      lineNumber: z.string(),
+      productId: z.string(),
+      uom: z.string().default('C62'),
+    },
+  },
+  async ({ trolleyItemId, lineNumber, productId, uom }) => {
+    try {
+      const ctx = await sendToExtension('get_storage');
+      const orderId: string = ctx.local?.wtr_order_id ?? '';
+      if (!orderId) throw new Error('No active order');
+
+      const body = JSON.stringify({
+        query: `mutation($orderId: ID!, $trolleyItem: TrolleyItemInput) {
+          updateTrolleyItem(orderId: $orderId, trolleyItem: $trolleyItem) {
+            trolley {
+              trolleyTotals { itemTotalEstimatedCost { amount currencyCode } }
+            }
+            failures { message type }
+          }
+        }`,
+        variables: {
+          orderId,
+          trolleyItem: { trolleyItemId, lineNumber, productId, quantity: { amount: 0, uom }, canSubstitute: true, personalisedMessage: null },
+        },
+      });
+
+      const result = await tabFetch('POST', '/api/graphql-prod/graph/live?clientType=WEB_APP&tag=updateTrolleyItem', body);
+      const data = JSON.parse(result.body);
+      const failures = data?.data?.updateTrolleyItem?.failures ?? [];
+      if (failures.length) throw new Error(failures.map((f: any) => f.message).join(', '));
+
+      const total = data?.data?.updateTrolleyItem?.trolley?.trolleyTotals?.itemTotalEstimatedCost;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({ ok: true, basketTotal: total ? `£${total.amount.toFixed(2)}` : null }),
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `remove_from_basket failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  'add_to_basket',
+  {
+    description: 'Add a product to the Waitrose basket. Use lineNumber and id from search_products results.',
+    inputSchema: {
+      lineNumber: z.string().describe('Product line number, e.g. "053457"'),
+      productId: z.string().describe('Product id, e.g. "053457-26759-26760"'),
+      quantity: z.number().int().min(1).default(1),
+      uom: z.string().default('C62').describe('Unit of measure from search results'),
+    },
   },
   async ({ lineNumber, productId, quantity, uom }) => {
     try {
@@ -216,13 +411,42 @@ server.tool(
   }
 );
 
-server.tool(
+server.registerTool(
+  'empty_trolley',
+  { description: 'Remove all items from the basket at once.' },
+  async () => {
+    try {
+      const ctx = await sendToExtension('get_storage');
+      const orderId: string = ctx.local?.wtr_order_id ?? '';
+      if (!orderId) throw new Error('No active order');
+
+      const result = await tabFetch(
+        'POST',
+        '/api/graphql-prod/graph/live?clientType=WEB_APP&tag=empty-trolley',
+        JSON.stringify({
+          query: `mutation($orderId: ID!) { emptyTrolley(orderId: $orderId) { trolley { orderId } } }`,
+          variables: { orderId },
+        }),
+      );
+      const data = JSON.parse(result.body);
+      if (data?.errors?.length) throw new Error(data.errors.map((e: any) => e.message).join(', '));
+
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true }) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `empty_trolley failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
   'api_call',
-  'Make a cookie-authenticated HTTP request to any Waitrose API endpoint via the browser tab. Use for exploration or endpoints not covered by a dedicated tool.',
   {
-    method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).default('GET').describe('HTTP method'),
-    path: z.string().describe('API path, e.g. /api/delivery-pass-orchestration-prod/v1/pass/status'),
-    body: z.string().optional().describe('JSON request body (for POST/PUT)'),
+    description: 'Make a cookie-authenticated HTTP request to any Waitrose API endpoint via the browser tab. Use for exploration or endpoints not covered by a dedicated tool.',
+    inputSchema: {
+      method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).default('GET').describe('HTTP method'),
+      path: z.string().describe('API path, e.g. /api/delivery-pass-orchestration-prod/v1/pass/status'),
+      body: z.string().optional().describe('JSON request body (for POST/PUT)'),
+    },
   },
   async ({ method, path, body }) => {
     try {
@@ -237,6 +461,80 @@ server.tool(
       };
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `api_call failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+const ORDER_STATUSES = 'AMENDING%2BFULFIL%2BPAID%2BPAYMENT_FAILED%2BPICKED%2BPLACED';
+
+server.registerTool(
+  'get_orders',
+  {
+    description: 'List past and active Waitrose orders, most recent first.',
+    inputSchema: {
+      size: z.number().int().min(1).max(50).default(15).describe('Number of orders to return'),
+    },
+  },
+  async ({ size }) => {
+    try {
+      const result = await tabFetch('GET', `/api/order-orchestration-prod/v1/orders?size=${size}&sortBy=%2B&statuses=${ORDER_STATUSES}`);
+      if (result.status !== 200) throw new Error(`HTTP ${result.status}`);
+      const data = JSON.parse(result.body);
+      const orders = (data.content ?? []).map((o: any) => ({
+        orderId: o.customerOrderId,
+        status: o.status,
+        placedDate: o.created,
+        deliveryDate: o.slots?.[0]?.startDateTime ?? null,
+        itemCount: o.numberOfItems ?? null,
+        total: o.totals?.estimated?.totalPrice?.amount != null
+          ? `£${Number(o.totals.estimated.totalPrice.amount).toFixed(2)}`
+          : null,
+      }));
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ orders }, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `get_orders failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.registerTool(
+  'get_order_details',
+  {
+    description: 'Get full item list for a specific past order. Use orderId from get_orders.',
+    inputSchema: {
+      orderId: z.string().describe('Order ID from get_orders'),
+    },
+  },
+  async ({ orderId }) => {
+    try {
+      const result = await tabFetch('GET', `/api/order-orchestration-prod/v1/orders/${orderId}`);
+      if (result.status !== 200) throw new Error(`HTTP ${result.status}`);
+      const data = JSON.parse(result.body);
+      const order = data;
+      const items = (order.orderLines ?? []).map((l: any) => ({
+        lineNumber: l.lineNumber,
+        quantity: l.quantity?.amount ?? null,
+        uom: l.quantity?.uom ?? 'C62',
+        unitPrice: l.estimatedUnitPrice?.amount != null ? `£${Number(l.estimatedUnitPrice.amount).toFixed(2)}` : null,
+        totalPrice: l.estimatedTotalPrice?.amount != null ? `£${Number(l.estimatedTotalPrice.amount).toFixed(2)}` : null,
+      }));
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            orderId: order.customerOrderId ?? orderId,
+            status: order.status,
+            placedDate: order.created,
+            deliveryDate: order.slots?.[0]?.startDateTime ?? null,
+            total: order.totals?.estimated?.totalPrice?.amount != null
+              ? `£${Number(order.totals.estimated.totalPrice.amount).toFixed(2)}`
+              : null,
+            items,
+          }, null, 2),
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `get_order_details failed: ${e.message}` }], isError: true };
     }
   }
 );

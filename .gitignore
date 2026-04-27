@@ -5,3 +5,4 @@ host/dist/
 *.har
 .dumps/
 .conda/
+credentials.json

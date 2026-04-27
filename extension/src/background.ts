@@ -3,6 +3,12 @@ const WS_URL = 'ws://localhost:18321';
 let ws: WebSocket | null = null;
 let connected = false;
 
+// --- Cached state for popup ---
+let lastPingTime: number | null = null;
+let cachedCustomerId = '';
+let cachedOrderId = '';
+let cachedToken = '';
+
 // --- WebSocket ---
 
 function connect() {
@@ -20,7 +26,9 @@ function connect() {
 
   ws.onmessage = (event) => {
     try {
-      handleMessage(JSON.parse(event.data as string));
+      const msg = JSON.parse(event.data as string);
+      console.log('[ShopMe] Message received:', msg.type, msg.id);
+      handleMessage(msg);
     } catch (e) {
       console.error('[ShopMe] Bad message:', e);
     }
@@ -58,6 +66,7 @@ async function handleMessage(msg: { id: string; type: string; data?: any }) {
 
   switch (type) {
     case 'ping':
+      lastPingTime = Date.now();
       reply(id, 'pong', { ok: true });
       break;
 
@@ -95,11 +104,24 @@ async function handleMessage(msg: { id: string; type: string; data?: any }) {
                 const k = sessionStorage.key(i)!;
                 session[k] = sessionStorage.getItem(k) ?? '';
               }
+              // If wtr_order_id was cleared (SPA sets "undefined" after emptyTrolley),
+              // fall back to scanning the SSR __PRELOADED_STATE__ script element.
+              if (!local['wtr_order_id'] || local['wtr_order_id'] === 'undefined') {
+                for (const s of Array.from(document.scripts)) {
+                  const t = s.textContent;
+                  if (!t.includes('customerOrderId')) continue;
+                  const m = t.match(/"customerOrderId"\s*:\s*"(\d+)"/);
+                  if (m) { local['wtr_order_id'] = m[1]; break; }
+                }
+              }
               return { local, session };
             },
           }),
         ]);
-        reply(id, 'storage', { cookies, ...storage[0]?.result });
+        const storageResult = storage[0]?.result as any ?? {};
+        cachedCustomerId = storageResult.local?.wtr_customer_id ?? cachedCustomerId;
+        cachedOrderId = storageResult.local?.wtr_order_id ?? cachedOrderId;
+        reply(id, 'storage', { cookies, ...storageResult });
       } catch (e: any) {
         reply(id, 'error', { message: `get_storage failed: ${e.message}` });
       }
@@ -113,42 +135,61 @@ async function handleMessage(msg: { id: string; type: string; data?: any }) {
           reply(id, 'error', { message: 'No Waitrose tab found — open waitrose.com first' });
           break;
         }
+        const tabId = tabs[0].id!;
         const { method, path, body } = data as { method: string; path: string; body?: string };
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tabs[0].id! },
-          func: async (method: string, path: string, body: string | null) => {
-            try {
-              let fromScript: string | null = null;
-              for (const s of Array.from(document.scripts)) {
-                if (!s.textContent.includes('__PRELOADED_STATE__')) continue;
-                const m = s.textContent.match(/"accessToken"\s*:\s*"Bearer ([^"]+)"/);
-                if (m) { fromScript = m[1]; break; }
-              }
-              const token: string | null = fromScript ?? (window as any).__shopmeToken__ ?? null;
-              const headers: Record<string, string> = {
-                origin: 'https://www.waitrose.com',
-                referer: location.href,
-                breadcrumb: 'shopme',
-                features: 'enAppleWallet',
-                graphflags: '{}',
-              };
-              if (token) headers['authorization'] = `Bearer ${token}`;
-              if (body) headers['content-type'] = 'application/json';
-              const res = await fetch(path, { method, headers, credentials: 'include', body: body ?? undefined });
-              const text = await res.text();
-              return { ok: true, status: res.status, body: text };
-            } catch (e: any) {
-              return { ok: false, error: e.message };
+
+        const tabFetchScript = async (method: string, path: string, body: string | null) => {
+          try {
+            let fromScript: string | null = null;
+            for (const s of Array.from(document.scripts)) {
+              if (!s.textContent.includes('__PRELOADED_STATE__')) continue;
+              const m = s.textContent.match(/"accessToken"\s*:\s*"Bearer ([^"]+)"/);
+              if (m) { fromScript = m[1]; break; }
             }
-          },
-          args: [method, path, body ?? null],
-        });
-        const result = results[0]?.result as any;
+            const token: string | null = fromScript ?? (window as any).__shopmeToken__ ?? null;
+            const headers: Record<string, string> = {
+              origin: 'https://www.waitrose.com',
+              referer: location.href,
+              breadcrumb: 'shopme',
+              features: 'enAppleWallet',
+              graphflags: '{}',
+            };
+            if (token) headers['authorization'] = `Bearer ${token}`;
+            if (body) headers['content-type'] = 'application/json';
+            const res = await fetch(path, { method, headers, credentials: 'include', body: body ?? undefined });
+            const text = await res.text();
+            return { ok: true, status: res.status, body: text, token };
+          } catch (e: any) {
+            return { ok: false, error: e.message };
+          }
+        };
+
+        let results = await chrome.scripting.executeScript({ target: { tabId }, func: tabFetchScript, args: [method, path, body ?? null] });
+        let result = results[0]?.result as any;
+
+        if (result?.ok && result.status === 401) {
+          console.log('[ShopMe] 401 received — reloading tab for fresh token');
+          await new Promise<void>((resolve) => {
+            chrome.tabs.onUpdated.addListener(function listener(updatedId, info) {
+              if (updatedId === tabId && info.status === 'complete') {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+              }
+            });
+            chrome.tabs.reload(tabId);
+          });
+          await new Promise(r => setTimeout(r, 1500));
+          results = await chrome.scripting.executeScript({ target: { tabId }, func: tabFetchScript, args: [method, path, body ?? null] });
+          result = results[0]?.result as any;
+          console.log('[ShopMe] Retry after reload, status:', result?.status);
+        }
+
         if (!result) {
           reply(id, 'error', { message: 'executeScript returned no result' });
         } else if (!result.ok) {
           reply(id, 'error', { message: `Tab fetch error: ${result.error}` });
         } else {
+          if (result.token) cachedToken = result.token;
           reply(id, 'fetch_result', { status: result.status, body: result.body });
         }
       } catch (e: any) {
@@ -166,7 +207,10 @@ async function handleMessage(msg: { id: string; type: string; data?: any }) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'get_status') {
-    sendResponse({ connected });
+    const tokenPreview = cachedToken
+      ? cachedToken.slice(0, 12) + '…'
+      : null;
+    sendResponse({ connected, customerId: cachedCustomerId, orderId: cachedOrderId, tokenPreview, lastPingTime });
   }
   return false;
 });

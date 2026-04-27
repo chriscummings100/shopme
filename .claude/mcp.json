@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "shopme": {
-      "command": "npx",
-      "args": ["tsx", "host/src/index.ts"],
+      "command": "node",
+      "args": ["host/dist/index.js"],
       "cwd": "c:\\dev\\shopme"
     }
   }
