@@ -27,7 +27,8 @@
       "Bash(python harfile.py)",
       "mcp__shopme__api_call",
       "Bash(python -c ' *)",
-      "mcp__shopme__search_products"
+      "mcp__shopme__search_products",
+      "mcp__shopme__add_to_basket"
     ]
   }
 }

@@ -15,6 +15,10 @@ const pendingRequests = new Map<
 
 const wss = new WebSocketServer({ port: WS_PORT });
 
+setInterval(() => {
+  if (extensionWs?.readyState === WebSocket.OPEN) extensionWs.ping();
+}, 25_000);
+
 wss.on('connection', (ws) => {
   extensionWs = ws;
   console.error('[shopme] Extension connected');
@@ -162,6 +166,52 @@ server.tool(
       };
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `search_products failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'add_to_basket',
+  'Add a product to the Waitrose basket. Use lineNumber and id from search_products results.',
+  {
+    lineNumber: z.string().describe('Product line number, e.g. "053457"'),
+    productId: z.string().describe('Product id, e.g. "053457-26759-26760"'),
+    quantity: z.number().int().min(1).default(1),
+    uom: z.string().default('C62').describe('Unit of measure from search results'),
+  },
+  async ({ lineNumber, productId, quantity, uom }) => {
+    try {
+      const ctx = await sendToExtension('get_storage');
+      const orderId: string = ctx.local?.wtr_order_id ?? '';
+      if (!orderId) throw new Error('No active order — not logged in or no order started');
+
+      const trolleyItemId = -parseInt(lineNumber, 10);
+      const body = JSON.stringify({
+        query: `mutation($orderId: ID!, $trolleyItem: TrolleyItemInput) {
+          addItemToTrolley(orderId: $orderId, trolleyItem: $trolleyItem) {
+            trolley {
+              trolleyTotals { itemTotalEstimatedCost { amount currencyCode } }
+            }
+            failures { message type }
+          }
+        }`,
+        variables: { orderId, trolleyItem: { lineNumber, productId, quantity: { amount: quantity, uom }, trolleyItemId } },
+      });
+
+      const result = await tabFetch('POST', '/api/graphql-prod/graph/live?clientType=WEB_APP&tag=add-item', body);
+      const data = JSON.parse(result.body);
+      const failures = data?.data?.addItemToTrolley?.failures ?? [];
+      if (failures.length) throw new Error(failures.map((f: any) => f.message).join(', '));
+
+      const total = data?.data?.addItemToTrolley?.trolley?.trolleyTotals?.itemTotalEstimatedCost;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({ ok: true, basketTotal: total ? `£${total.amount.toFixed(2)}` : null }),
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `add_to_basket failed: ${e.message}` }], isError: true };
     }
   }
 );
