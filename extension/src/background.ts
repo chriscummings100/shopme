@@ -72,12 +72,6 @@ async function handleMessage(msg: { id: string; type: string; data?: any }) {
       break;
     }
 
-    case 'get_cookies': {
-      const cookies = await chrome.cookies.getAll({ domain: '.waitrose.com' });
-      reply(id, 'cookies', cookies);
-      break;
-    }
-
     case 'get_storage': {
       try {
         const tabs = await chrome.tabs.query({ url: '*://*.waitrose.com/*' });
@@ -108,46 +102,6 @@ async function handleMessage(msg: { id: string; type: string; data?: any }) {
         reply(id, 'storage', { cookies, ...storage[0]?.result });
       } catch (e: any) {
         reply(id, 'error', { message: `get_storage failed: ${e.message}` });
-      }
-      break;
-    }
-
-    case 'get_tab_token': {
-      try {
-        const tabs = await chrome.tabs.query({ url: '*://*.waitrose.com/*' });
-        if (!tabs.length || tabs[0].id == null) {
-          reply(id, 'error', { message: 'No Waitrose tab found' });
-          break;
-        }
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tabs[0].id! },
-          world: 'MAIN',
-          func: () => {
-            // Token is baked into SSR HTML as inline <script> text — __PRELOADED_STATE__
-            // gets overwritten with `true` by the SPA later, so read the raw script text.
-            let fromScript: string | null = null;
-            for (const s of Array.from(document.scripts)) {
-              if (!s.textContent.includes('__PRELOADED_STATE__')) continue;
-              const m = s.textContent.match(/"accessToken"\s*:\s*"(Bearer [^"]+)"/);
-              if (m) { fromScript = m[1]; break; }
-            }
-            // Fall back to content script hook (for refreshed tokens)
-            const fromHook = (window as any).__shopmeToken__
-              ? `Bearer ${(window as any).__shopmeToken__}`
-              : null;
-            return fromScript ?? fromHook ?? null;
-          },
-        });
-        const token: string | null = results[0]?.result ?? null;
-        if (token) {
-          // Strip "Bearer " prefix if present — callers add it themselves
-          const jwt = token.startsWith('Bearer ') ? token.slice(7) : token;
-          reply(id, 'token', { accessToken: jwt });
-        } else {
-          reply(id, 'error', { message: 'No token found — reload the Waitrose tab' });
-        }
-      } catch (e: any) {
-        reply(id, 'error', { message: `get_tab_token failed: ${e.message}` });
       }
       break;
     }

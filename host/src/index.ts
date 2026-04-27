@@ -2,7 +2,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { z } from 'zod';
-import { readFileSync } from 'fs';
 
 const WS_PORT = 18321;
 
@@ -67,22 +66,6 @@ async function tabFetch(method: string, path: string, body?: string): Promise<{ 
   return sendToExtension('fetch_from_tab', { method, path, body: body ?? null });
 }
 
-// --- HAR store ---
-
-interface HarEntry {
-  url: string;
-  method: string;
-  status: number;
-  requestHeaders: Record<string, string>;
-  responseHeaders: Record<string, string>;
-  requestBody?: string;
-  responseBody?: string;
-  mimeType: string;
-  time: number;
-}
-
-let harEntries: HarEntry[] = [];
-
 // --- MCP Server ---
 
 const server = new McpServer({ name: 'shopme', version: '0.1.0' });
@@ -110,29 +93,6 @@ server.tool(
   }
 );
 
-server.tool('get_storage', 'Get all browser storage for the Waitrose tab: cookies, localStorage, and sessionStorage.', {}, async () => {
-  try {
-    const result = await sendToExtension('get_storage');
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-  } catch (e: any) {
-    return { content: [{ type: 'text' as const, text: `Failed: ${e.message}` }], isError: true };
-  }
-});
-
-server.tool(
-  'get_token',
-  'Read the Bearer JWT captured by the content script from the Waitrose tab. Reload the Waitrose page first to let the content script hook the SPA fetch calls.',
-  {},
-  async () => {
-    try {
-      const result = await sendToExtension('get_tab_token');
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-    } catch (e: any) {
-      return { content: [{ type: 'text' as const, text: `Failed: ${e.message}` }], isError: true };
-    }
-  }
-);
-
 server.tool(
   'get_shopping_context',
   'Get customerId and active orderId from the Waitrose tab localStorage. Call this before basket or search operations.',
@@ -151,6 +111,57 @@ server.tool(
       };
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `Failed: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'search_products',
+  'Search for products on Waitrose. Returns id, lineNumber, name, size, price, and any active promotions.',
+  {
+    searchTerm: z.string().describe('Search query, e.g. "semi-skimmed milk"'),
+    size: z.number().int().min(1).max(48).default(10).describe('Number of results to return'),
+    sortBy: z.enum(['MOST_POPULAR', 'PRICE_LOW_TO_HIGH', 'PRICE_HIGH_TO_LOW', 'RATING']).default('MOST_POPULAR'),
+  },
+  async ({ searchTerm, size, sortBy }) => {
+    try {
+      const ctx = await sendToExtension('get_storage');
+      const customerId: string = ctx.local?.wtr_customer_id ?? '';
+      const orderId: string = ctx.local?.wtr_order_id ?? '';
+      if (!customerId) throw new Error('Not logged in');
+
+      const result = await tabFetch(
+        'POST',
+        `/api/content-prod/v2/cms/publish/productcontent/search/${customerId}?clientType=WEB_APP`,
+        JSON.stringify({ customerSearchRequest: { queryParams: { searchTerm, size, sortBy, searchTags: [], filterTags: [], orderId, categoryLevel: 1 } } }),
+      );
+      if (result.status !== 200) throw new Error(`Search failed: HTTP ${result.status}`);
+
+      const data = JSON.parse(result.body);
+      const products = (data.componentsAndProducts ?? [])
+        .filter((c: any) => c.searchProduct)
+        .map((c: any) => {
+          const p = c.searchProduct;
+          return {
+            id: p.id,
+            lineNumber: p.lineNumber,
+            name: p.name,
+            size: p.size,
+            price: p.displayPrice,
+            pricePerUnit: p.displayPriceQualifier,
+            promotion: p.promotion?.promotionDescription ?? null,
+            uom: p.defaultQuantity?.uom ?? 'C62',
+          };
+        });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({ totalMatches: data.totalMatches, products }, null, 2),
+        }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `search_products failed: ${e.message}` }], isError: true };
     }
   }
 );
@@ -177,62 +188,6 @@ server.tool(
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `api_call failed: ${e.message}` }], isError: true };
     }
-  }
-);
-
-server.tool(
-  'load_har',
-  'Load a HAR file exported from Chrome DevTools (Network tab → right-click → Save all as HAR with content). Replaces any previously loaded HAR.',
-  { path: z.string().describe('Absolute path to the .har file') },
-  async ({ path }) => {
-    try {
-      const raw = readFileSync(path, 'utf8');
-      const har = JSON.parse(raw);
-      const entries: HarEntry[] = har.log.entries
-        .filter((e: any) => e.request.url.includes('waitrose.com'))
-        .map((e: any) => {
-          const toHeaders = (arr: any[]) =>
-            Object.fromEntries(arr.map((h: any) => [h.name, h.value]));
-          return {
-            url: e.request.url,
-            method: e.request.method,
-            status: e.response.status,
-            requestHeaders: toHeaders(e.request.headers),
-            responseHeaders: toHeaders(e.response.headers),
-            requestBody: e.request.postData?.text,
-            responseBody: e.response.content?.text,
-            mimeType: e.response.content?.mimeType ?? '',
-            time: e.time,
-          };
-        });
-      harEntries = entries;
-      return { content: [{ type: 'text' as const, text: `Loaded ${entries.length} Waitrose requests from HAR.` }] };
-    } catch (e: any) {
-      return { content: [{ type: 'text' as const, text: `Failed to load HAR: ${e.message}` }], isError: true };
-    }
-  }
-);
-
-server.tool(
-  'query_har',
-  'Query the loaded HAR entries. Filter by URL substring, HTTP method, or resource type. Returns matching entries including request/response bodies.',
-  {
-    filter: z.string().optional().describe('URL substring filter (e.g. "graphql", "search", "trolley")'),
-    method: z.string().optional().describe('HTTP method filter (e.g. "POST", "GET")'),
-    mime: z.string().optional().describe('Response MIME type filter (e.g. "application/json")'),
-  },
-  async ({ filter, method, mime }) => {
-    let results = [...harEntries];
-    if (filter) results = results.filter(r => r.url.includes(filter));
-    if (method) results = results.filter(r => r.method.toUpperCase() === method.toUpperCase());
-    if (mime) results = results.filter(r => r.mimeType.includes(mime));
-    const summary = `${results.length} entries${filter ? ` matching "${filter}"` : ''}`;
-    return {
-      content: [
-        { type: 'text' as const, text: summary },
-        { type: 'text' as const, text: JSON.stringify(results, null, 2) },
-      ],
-    };
   }
 );
 
