@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shopme": {
+      "command": "npx",
+      "args": ["tsx", "host/src/index.ts"],
+      "cwd": "c:\\dev\\shopme"
+    }
+  }
+}

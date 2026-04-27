@@ -3,3 +3,5 @@ extension/dist/
 host/dist/
 *.map
 *.har
+.dumps/
+.conda/

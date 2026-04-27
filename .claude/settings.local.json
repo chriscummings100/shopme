@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(node scripts/build.mjs)",
+      "PowerShell(\\(Get-Command node\\).Source)",
+      "Bash(node host/dist/index.js)",
+      "Bash(jobs -l)",
+      "PowerShell(Stop-Process -Force)",
+      "mcp__shopme__ping",
+      "mcp__shopme__start_capture",
+      "mcp__shopme__navigate",
+      "mcp__shopme__stop_capture",
+      "mcp__shopme__get_captured_traffic",
+      "Bash(node -e ' *)",
+      "mcp__shopme__load_har",
+      "mcp__shopme__query_har",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(npm run *)",
+      "mcp__shopme__get_session",
+      "mcp__shopme__get_cookies",
+      "mcp__shopme__get_shopping_context",
+      "mcp__shopme__find_token",
+      "Bash(python3)",
+      "mcp__shopme__get_storage",
+      "Bash(python harfile.py)",
+      "mcp__shopme__api_call",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

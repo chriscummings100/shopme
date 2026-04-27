@@ -6,7 +6,8 @@
   "permissions": [
     "cookies",
     "tabs",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "*://*.waitrose.com/*"
@@ -14,6 +15,14 @@
   "background": {
     "service_worker": "dist/background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["*://*.waitrose.com/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "ShopMe"
