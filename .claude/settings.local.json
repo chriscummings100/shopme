@@ -45,7 +45,12 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "mcp__chromedevtools",
+      "Bash(.conda/python.exe scripts/network_filter.py --input ./api-spy-output/raw_requests.txt --output ./api-spy-output/summary.json --domain sainsburys.co.uk)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "shopme"
+  ]
 }

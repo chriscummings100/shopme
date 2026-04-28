@@ -14,9 +14,9 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
     "@anthropic-ai/claude-code": "^1.0.3",
     "@anthropic-ai/sdk": "^0.39.0",
-    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
     "@types/chrome": "^0.0.287",
     "@types/ws": "^8.5.13",
     "esbuild": "^0.24.0",

@@ -7,7 +7,7 @@ Execute each step in order. After every tool call, check the stated assertion â€
 
 ## Step 1 â€” ping
 **Tool:** `ping`  
-**Assert:** Response contains "connected and responding" (no error).
+**Assert:** Response contains "API reachable" with no error.
 
 ---
 
