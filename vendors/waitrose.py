@@ -6,7 +6,18 @@ from .base import (
 
 _BASE = 'https://www.waitrose.com'
 _GRAPHQL = f'{_BASE}/api/graphql-prod/graph/live'
-_ORDER_STATUSES = 'AMENDING%2BFULFIL%2BPAID%2BPAYMENT_FAILED%2BPICKED%2BPLACED'
+
+# Reused across fetch calls and the 401-retry path
+_FETCH_JS = """async ([method, url, body, token]) => {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (token) opts.headers['Authorization'] = token;
+    if (body !== null) opts.body = JSON.stringify(body);
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    return { status: r.status, body: data };
+}"""
 
 
 class WaitroseVendor(ShoppingVendor):
@@ -14,25 +25,81 @@ class WaitroseVendor(ShoppingVendor):
         self._page = page
         self._customer_id = ''
         self._order_id = ''
+        self._token = ''
 
     async def _init_context(self):
-        ctx = await self._page.evaluate("""() => ({
-            customerId: localStorage.getItem('wtr_customer_id'),
-            orderId: localStorage.getItem('wtr_order_id'),
-        })""")
+        ctx = await self._page.evaluate("""() => {
+            // Hook window.fetch to capture tokens from the SPA's own outgoing requests.
+            if (!window.__shopmeHooked) {
+                window.__shopmeHooked = true;
+                const orig = window.fetch;
+                window.fetch = function(input, init) {
+                    init = init || {};
+                    const h = init.headers || {};
+                    const auth = (typeof h.get === 'function')
+                        ? h.get('authorization')
+                        : (h['authorization'] || h['Authorization'] || '');
+                    if (auth && auth.startsWith('Bearer ')) window.__shopmeToken__ = auth;
+                    return orig.call(this, input, init);
+                };
+            }
+            const ctx = {
+                customerId: localStorage.getItem('wtr_customer_id') || '',
+                orderId:    localStorage.getItem('wtr_order_id')    || '',
+                token:      window.__shopmeToken__                  || '',
+            };
+            // Scan SSR script elements — token and orderId live there on page load
+            // even after the SPA overwrites window.__PRELOADED_STATE__ with true.
+            for (const script of document.querySelectorAll('script')) {
+                const text = script.textContent;
+                if (!ctx.token) {
+                    const m = text.match(/"accessToken":"(Bearer [^"]+)"/);
+                    if (m) ctx.token = m[1];
+                }
+                if (!ctx.orderId) {
+                    const m = text.match(/"customerOrderId":"([^"]+)"/);
+                    if (m) ctx.orderId = m[1];
+                }
+                if (!ctx.customerId) {
+                    const m = text.match(/"customerId":"([^"]+)"/);
+                    if (m) ctx.customerId = m[1];
+                }
+                if (ctx.token && ctx.orderId && ctx.customerId) break;
+            }
+            return ctx;
+        }""")
         self._customer_id = ctx.get('customerId') or ''
-        self._order_id = ctx.get('orderId') or ''
+        self._order_id    = ctx.get('orderId')    or ''
+        self._token       = ctx.get('token')      or ''
+
+        # If orderId still missing but we have a token, check for an amending order.
+        if not self._order_id and self._token:
+            result = await self._page.evaluate(_FETCH_JS, [
+                'GET',
+                f'{_BASE}/api/order-orchestration-prod/v1/orders?size=1&sortBy=%2B&statuses=AMENDING',
+                None,
+                self._token,
+            ])
+            if result['status'] == 200:
+                content = result['body'].get('content') or []
+                if content:
+                    self._order_id = content[0].get('customerOrderId', '')
 
     async def _fetch(self, method: str, url: str, body=None) -> dict:
-        return await self._page.evaluate("""async ([method, url, body]) => {
-            const opts = { method, headers: { 'Content-Type': 'application/json' } };
-            if (body !== null) opts.body = JSON.stringify(body);
-            const r = await fetch(url, opts);
-            const text = await r.text();
-            let data;
-            try { data = JSON.parse(text); } catch { data = text; }
-            return { status: r.status, body: data };
-        }""", [method, url, body])
+        # Pick up any token the SPA's fetch hook has captured since last call.
+        fresh = await self._page.evaluate("() => window.__shopmeToken__ || ''")
+        if fresh:
+            self._token = fresh
+
+        result = await self._page.evaluate(_FETCH_JS, [method, url, body, self._token])
+
+        if result['status'] == 401:
+            # Token expired — reload to get a fresh SSR token, then retry once.
+            await self._page.reload(wait_until='networkidle')
+            await self._init_context()
+            result = await self._page.evaluate(_FETCH_JS, [method, url, body, self._token])
+
+        return result
 
     async def _gql(self, query: str, variables: dict) -> dict:
         result = await self._fetch('POST', _GRAPHQL, {'query': query, 'variables': variables})
@@ -74,11 +141,13 @@ class WaitroseVendor(ShoppingVendor):
             await self._init_context()
         url = (f'{_BASE}/api/content-prod/v2/cms/publish/productcontent'
                f'/search/{self._customer_id}?clientType=WEB_APP')
-        body = {'customerSearchRequest': {'queryParams': {
+        params: dict = {
             'searchTerm': term, 'size': size, 'sortBy': 'MOST_POPULAR',
-            'searchTags': [], 'filterTags': [],
-            'orderId': self._order_id, 'categoryLevel': 1,
-        }}}
+            'searchTags': [], 'filterTags': [], 'categoryLevel': 1,
+        }
+        if self._order_id:
+            params['orderId'] = self._order_id
+        body = {'customerSearchRequest': {'queryParams': params}}
         result = await self._fetch('POST', url, body)
         if result['status'] != 200:
             raise RuntimeError(f'Search HTTP {result["status"]}')
@@ -215,8 +284,7 @@ class WaitroseVendor(ShoppingVendor):
         return await self.get_cart()
 
     async def get_orders(self, size: int = 15) -> list[Order]:
-        url = (f'{_BASE}/api/order-orchestration-prod/v1/orders'
-               f'?size={size}&sortBy=%2B&statuses={_ORDER_STATUSES}')
+        url = f'{_BASE}/api/order-orchestration-prod/v1/orders?size={size}&sortBy=%2B'
         result = await self._fetch('GET', url)
         if result['status'] != 200:
             raise RuntimeError(f'Orders HTTP {result["status"]}')

@@ -32,9 +32,15 @@ async def test_find_waitrose_page():
 
 
 @pytest.mark.integration
-async def test_get_context_returns_ids(vendor):
+async def test_get_context_returns_customer_id(vendor):
     assert vendor._customer_id, 'customerId is empty — are you logged in to Waitrose?'
-    assert vendor._order_id, 'orderId is empty — are you logged in to Waitrose?'
+
+
+@pytest.mark.integration
+async def test_get_context_returns_order_id(vendor):
+    if not vendor._order_id:
+        pytest.skip('orderId not available — no active basket on this account')
+    assert vendor._order_id
 
 
 @pytest.mark.integration

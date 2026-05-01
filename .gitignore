@@ -1,11 +1,10 @@
 node_modules/
-extension/dist/
-host/dist/
 api-spy-output/
 *.map
 *.har
 *.pyc
-__pycache/
+__pycache__/
+.pytest_cache/
 .dumps/
 .conda/
 credentials.json

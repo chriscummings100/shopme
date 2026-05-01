@@ -71,11 +71,34 @@ async def get_vendor(vendor_name: str):
         yield vendor
 
 
+async def cmd_screenshot(url: str, output: str):
+    async with async_playwright() as playwright:
+        try:
+            browser = await playwright.chromium.connect_over_cdp(CDP_URL)
+        except Exception as e:
+            print(json.dumps({'error': f'Cannot connect to Chrome: {e}'}))
+            sys.exit(1)
+
+        context = browser.contexts[0] if browser.contexts else await browser.new_context()
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until='load', timeout=15000)
+            await page.screenshot(path=output, full_page=False)
+        finally:
+            await page.close()
+
+    print(json.dumps({'path': os.path.abspath(output)}))
+
+
 async def run(args):
     vendor_name = args.vendor
 
     if args.command == 'start':
         cmd_start(vendor_name)
+        return
+
+    if args.command == 'screenshot':
+        await cmd_screenshot(args.url, args.out)
         return
 
     try:
@@ -148,6 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser('order', help='Get full details for a past order')
     p.add_argument('order_id')
+
+    p = sub.add_parser('screenshot', help='Screenshot a URL using the live Chrome session')
+    p.add_argument('url')
+    p.add_argument('--out', default='screenshot.png', help='Output file path (default: screenshot.png)')
 
     p = sub.add_parser('api', help='Raw authenticated API call (exploration)')
     p.add_argument('method', choices=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
