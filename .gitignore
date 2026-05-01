@@ -4,6 +4,8 @@ host/dist/
 api-spy-output/
 *.map
 *.har
+*.pyc
+__pycache/
 .dumps/
 .conda/
 credentials.json
