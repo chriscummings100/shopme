@@ -35,7 +35,7 @@ This opens Chrome with remote debugging enabled. Log in to your supermarket in t
 /shop
 ```
 
-The agent will ask which supermarket you want, pull your order history, and take a free-form shopping list, then work with you to shop!
+The agent will ask which supermarket you want, pull your order history and shopping memory, and take a free-form shopping list, then work with you to shop!
 
 ---
 
@@ -57,6 +57,10 @@ You can also drive the CLI directly. All commands output JSON.
 | `clear` | Empty the basket |
 | `orders [--size N]` | List past orders |
 | `order <order_id>` | Full detail for one order |
+| `memory summary [--vendor V]` | Show soft phrase-to-product associations |
+| `memory record ...` | Record that a phrase resolved to a product |
+| `memory reject ...` | Record that a phrase did not mean a product |
+| `memory explain <phrase>` | Show memory evidence for one phrase |
 
 **Example:**
 
@@ -70,6 +74,21 @@ You can also drive the CLI directly. All commands output JSON.
 # Check the basket
 .conda/python shopme.py cart
 ```
+
+**Memory examples:**
+
+```bash
+# Show the agent's compact memory briefing
+.conda/python shopme.py memory summary --vendor waitrose
+
+# Record that an ambiguous phrase ended up as a specific product
+.conda/python shopme.py memory record --vendor waitrose --phrase "d.yogurts" --product-id "<id>" --product-name "Little Yeos Strawberry Yogurts 6x45g" --search-term "kids strawberry yogurts"
+
+# Record a correction so the agent avoids repeating a bad association
+.conda/python shopme.py memory reject --vendor waitrose --phrase "cuke" --wrong-product-name "Coca-Cola Original Taste 2L" --correct-product-name "Essential Cucumber Each"
+```
+
+Memory is stored locally in `.shopme-memory/`. It is ignored by git because it contains personal household preferences.
 
 ---
 

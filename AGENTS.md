@@ -32,6 +32,8 @@ This means agents only ever pass IDs they received back from a prior command —
 
 ```
 shopme.py            CLI entry point — all commands, argument parsing, CDP connection
+shopping_memory.py   Soft phrase-to-product memory for household associations
+.shopme-memory/      Local memory event log and summary (gitignored)
 vendors/
   base.py            Abstract ShoppingVendor class + shared dataclasses
   waitrose.py        Waitrose implementation
@@ -69,6 +71,32 @@ Run all commands with `.conda/python shopme.py <command>`. All output is JSON on
 | `order <order_id>` | Full order detail. Returns `{order_id, status, ..., items[]}` |
 | `screenshot <url> [--out PATH]` | Open URL in a new tab, screenshot it, close the tab. Saves to `screenshot.png` by default |
 | `api <METHOD> <path> [body]` | Raw authenticated API call for exploration |
+| `memory summary [--vendor V]` | Show compact soft associations for the agent. Does not need Chrome |
+| `memory record ...` | Record that an original phrase resolved to a product |
+| `memory reject ...` | Record that an original phrase did not mean a product |
+| `memory explain <phrase>` | Show memory evidence for one phrase |
+
+---
+
+## Shopping memory
+
+`shopping_memory.py` stores an append-only log in `.shopme-memory/associations.jsonl`
+and writes a compact `.shopme-memory/summary.json`. This is personal household
+data and is ignored by git.
+
+Memory is intentionally soft. The `/shop` workflow loads `memory summary` up
+front, uses it to rank or suggest products, and records the final product after
+an ambiguous phrase is resolved. Repeated successful resolutions increase the
+score. Corrections use `memory reject` to push bad associations down and record
+the preferred product when known.
+
+Example:
+
+```bash
+.conda/python shopme.py memory summary --vendor waitrose
+.conda/python shopme.py memory record --vendor waitrose --phrase "d.yogurts" --product-id "<id>" --product-name "Little Yeos Strawberry Yogurts 6x45g" --search-term "kids strawberry yogurts"
+.conda/python shopme.py memory reject --vendor waitrose --phrase "cuke" --wrong-product-name "Coca-Cola Original Taste 2L" --correct-product-name "Essential Cucumber Each"
+```
 
 ---
 
@@ -115,7 +143,7 @@ Integration tests skip automatically if Chrome isn't running or the user isn't l
 
 | Skill | Trigger | What it does |
 |---|---|---|
-| `/shop` | User wants to add items to their basket | Gathers order history and current cart, takes a free-form shopping list, searches and adds each item decisively |
+| `/shop` | User wants to add items to their basket | Gathers memory, order history and current cart, takes a free-form shopping list, searches and adds each item decisively |
 | `/smoke-test` | Verify the CLI is working end-to-end | Runs 7 steps (cart, search, add, set qty, remove, orders, order detail) and reports PASS/FAIL |
 | `/api-spy` | Reverse-engineer a new website's API | Opens an isolated browser context, captures network traffic, analyses auth patterns, writes `api-spy-output/api_analysis.md` |
 

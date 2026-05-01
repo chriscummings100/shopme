@@ -7,4 +7,6 @@ __pycache__/
 .pytest_cache/
 .dumps/
 .conda/
+.shopme-memory/
+.test-memory/
 credentials.json

@@ -9,6 +9,8 @@ from dataclasses import asdict
 
 from playwright.async_api import async_playwright
 
+import shopping_memory
+
 CDP_URL = 'http://localhost:9222'
 VENDOR_URLS = {
     'waitrose': 'https://www.waitrose.com',
@@ -122,6 +124,15 @@ async def run(args):
         cmd_start(vendor_name)
         return
 
+    if args.command == 'memory':
+        try:
+            result = dispatch_memory(args)
+            print(json.dumps(result, indent=2))
+        except (RuntimeError, ValueError) as e:
+            print(json.dumps({'error': str(e)}))
+            sys.exit(1)
+        return
+
     if args.command == 'screenshot':
         await cmd_screenshot(args.url, args.out)
         return
@@ -168,6 +179,51 @@ async def dispatch(args, resolved_name: str, vendor):
     raise RuntimeError(f'Unknown command: {args.command}')
 
 
+def dispatch_memory(args):
+    vendor = getattr(args, 'memory_vendor', None) or args.vendor
+    limit = getattr(args, 'limit', 3)
+
+    if args.memory_command == 'summary':
+        return shopping_memory.build_summary(vendor=vendor, limit=limit)
+
+    if args.memory_command == 'explain':
+        return shopping_memory.explain(args.phrase, vendor=vendor, limit=limit)
+
+    if args.memory_command == 'record':
+        if not vendor:
+            raise RuntimeError('--vendor is required for memory record')
+        return {
+            'ok': True,
+            'event': shopping_memory.record_association(
+                phrase=args.phrase,
+                vendor=vendor,
+                product_id=args.product_id,
+                product_name=args.product_name,
+                search_term=args.search_term,
+                source=args.source,
+                size=args.size,
+                price=args.price,
+            ),
+        }
+
+    if args.memory_command == 'reject':
+        if not vendor:
+            raise RuntimeError('--vendor is required for memory reject')
+        return {
+            'ok': True,
+            'event': shopping_memory.record_rejection(
+                phrase=args.phrase,
+                vendor=vendor,
+                wrong_product_id=args.wrong_product_id,
+                wrong_product_name=args.wrong_product_name,
+                correct_product_id=args.correct_product_id,
+                correct_product_name=args.correct_product_name,
+            ),
+        }
+
+    raise RuntimeError(f'Unknown memory command: {args.memory_command}')
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='shopme', description='AI shopping assistant CLI')
     parser.add_argument('--vendor', default=None, choices=list(VENDOR_URLS),
@@ -207,6 +263,42 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('method', choices=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
     p.add_argument('path', help='API path, e.g. /api/delivery-pass-orchestration-prod/v1/pass/status')
     p.add_argument('body', nargs='?', default=None, help='JSON body string')
+
+    memory = sub.add_parser('memory', help='Read and write soft shopping associations')
+    memory_sub = memory.add_subparsers(dest='memory_command', required=True)
+
+    p = memory_sub.add_parser('summary', help='Show compact shopping memory for the agent')
+    p.add_argument('--vendor', dest='memory_vendor', choices=list(VENDOR_URLS),
+                   help='Only include associations for one vendor')
+    p.add_argument('--limit', type=int, default=3, help='Candidates per phrase (default: 3)')
+
+    p = memory_sub.add_parser('explain', help='Show memory for one phrase')
+    p.add_argument('phrase')
+    p.add_argument('--vendor', dest='memory_vendor', choices=list(VENDOR_URLS),
+                   help='Only include associations for one vendor')
+    p.add_argument('--limit', type=int, default=5, help='Candidates to show (default: 5)')
+
+    p = memory_sub.add_parser('record', help='Record that a phrase resolved to a product')
+    p.add_argument('--phrase', required=True, help='Original user phrase, e.g. "d.yogurts"')
+    p.add_argument('--product-id', required=True, help='Opaque product id from search results')
+    p.add_argument('--product-name', required=True)
+    p.add_argument('--vendor', dest='memory_vendor', choices=list(VENDOR_URLS),
+                   help='Vendor for this association')
+    p.add_argument('--search-term', default=None, help='Search term that found the product')
+    p.add_argument('--source', default='user_selected',
+                   choices=list(shopping_memory.POSITIVE_WEIGHTS),
+                   help='How the association was resolved')
+    p.add_argument('--size', default=None)
+    p.add_argument('--price', default=None)
+
+    p = memory_sub.add_parser('reject', help='Record that a phrase did not mean a product')
+    p.add_argument('--phrase', required=True, help='Original user phrase')
+    p.add_argument('--vendor', dest='memory_vendor', choices=list(VENDOR_URLS),
+                   help='Vendor for this correction')
+    p.add_argument('--wrong-product-id', default=None)
+    p.add_argument('--wrong-product-name', default=None)
+    p.add_argument('--correct-product-id', default=None)
+    p.add_argument('--correct-product-name', default=None)
 
     return parser
 
