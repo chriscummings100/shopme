@@ -47,7 +47,10 @@
       "WebFetch(domain:github.com)",
       "Bash(npx tsx *)",
       "mcp__chromedevtools",
-      "Bash(.conda/python.exe scripts/network_filter.py --input ./api-spy-output/raw_requests.txt --output ./api-spy-output/summary.json --domain sainsburys.co.uk)"
+      "Bash(.conda/python.exe scripts/network_filter.py --input ./api-spy-output/raw_requests.txt --output ./api-spy-output/summary.json --domain sainsburys.co.uk)",
+      "Bash(.conda/python.exe scripts/network_filter.py --input ./api-spy-output/waitrose/raw_requests.txt --output ./api-spy-output/waitrose/summary.json --domain waitrose.com)",
+      "Bash(.conda/python.exe -c ' *)",
+      "Bash(.conda/python.exe scripts/network_filter.py --input ./api-spy-output/waitrose/raw_requests_text.txt --output ./api-spy-output/waitrose/summary.json --domain waitrose.com)"
     ]
   },
   "enabledMcpjsonServers": [

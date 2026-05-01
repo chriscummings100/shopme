@@ -81,13 +81,30 @@ def parse_request_list(text: str) -> list[dict]:
             pass
 
     # Regex: match lines like  "123  GET  https://...  200  fetch"
+    # Also handles MCP tool format: "reqid=123 GET https://... [200]"
     # Tolerates markdown table formatting and varying whitespace
     requests = []
+    # MCP tool format: reqid=NNN METHOD URL [STATUS]
+    mcp_re = re.compile(
+        r'reqid=(\d+)\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)\s+\[(\d{3}|-)\]',
+        re.IGNORECASE,
+    )
     line_re = re.compile(
         r'(\d+)\s+\|?\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\|?\s*(\S+)\s+\|?\s*(\d{3}|-)\s*\|?\s*(\S*)',
         re.IGNORECASE,
     )
     for line in text.splitlines():
+        m = mcp_re.search(line)
+        if m:
+            reqid, method, url, status = m.groups()
+            requests.append({
+                'reqid': int(reqid),
+                'method': method.upper(),
+                'url': url,
+                'status': int(status) if status != '-' else None,
+                'type': '',
+            })
+            continue
         m = line_re.search(line)
         if m:
             reqid, method, url, status, rtype = m.groups()
