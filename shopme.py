@@ -10,7 +10,10 @@ from dataclasses import asdict
 from playwright.async_api import async_playwright
 
 CDP_URL = 'http://localhost:9222'
-VENDOR_URLS = {'waitrose': 'https://www.waitrose.com'}
+VENDOR_URLS = {
+    'waitrose': 'https://www.waitrose.com',
+    'sainsburys': 'https://www.sainsburys.co.uk',
+}
 
 CHROME_PATHS = [
     r'C:\Program Files\Google\Chrome\Application\chrome.exe',
@@ -41,34 +44,53 @@ def cmd_start(vendor_name: str):
     print(json.dumps({'ok': True, 'cdp': CDP_URL, 'url': url}))
 
 
-async def get_vendor(vendor_name: str):
-    from vendors.waitrose import WaitroseVendor
-
+async def get_vendor(vendor_name: str | None):
     async with async_playwright() as playwright:
         try:
             browser = await playwright.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
-            print(json.dumps({'error': f'Cannot connect to Chrome: {e}', 'hint': 'Run: python shopme.py start'}))
+            print(json.dumps({'error': f'Cannot connect to Chrome: {e}', 'hint': 'Run: python shopme.py start <vendor>'}))
             sys.exit(1)
 
-        vendor_host = VENDOR_URLS[vendor_name].replace('https://', '').replace('http://', '')
-        page = None
-        for context in browser.contexts:
-            for p in context.pages:
-                if vendor_host in p.url:
-                    page = p
+        if vendor_name:
+            host = VENDOR_URLS[vendor_name].replace('https://', '').replace('http://', '')
+            page = None
+            for context in browser.contexts:
+                for p in context.pages:
+                    if host in p.url:
+                        page = p
+                        break
+                if page:
                     break
-            if page:
-                break
+            if page is None:
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page = await context.new_page()
+                await page.goto(VENDOR_URLS[vendor_name])
+        else:
+            matches = []
+            for context in browser.contexts:
+                for p in context.pages:
+                    for name, url in VENDOR_URLS.items():
+                        host = url.replace('https://', '').replace('http://', '')
+                        if host in p.url:
+                            matches.append((name, p))
+            if not matches:
+                print(json.dumps({'error': 'No vendor site found in open tabs', 'hint': f'Open one of {list(VENDOR_URLS)} or run: python shopme.py start <vendor>'}))
+                sys.exit(1)
+            if len(matches) > 1:
+                print(json.dumps({'error': f'Multiple vendor tabs open: {[m[0] for m in matches]}', 'hint': 'Use --vendor to specify which one'}))
+                sys.exit(1)
+            vendor_name, page = matches[0]
 
-        if page is None:
-            context = browser.contexts[0] if browser.contexts else await browser.new_context()
-            page = await context.new_page()
-            await page.goto(VENDOR_URLS[vendor_name])
+        if vendor_name == 'sainsburys':
+            from vendors.sainsburys import SainsburysVendor
+            vendor = SainsburysVendor(page)
+        else:
+            from vendors.waitrose import WaitroseVendor
+            vendor = WaitroseVendor(page)
 
-        vendor = WaitroseVendor(page)
         await vendor._init_context()
-        yield vendor
+        yield vendor_name, vendor
 
 
 async def cmd_screenshot(url: str, output: str):
@@ -94,6 +116,9 @@ async def run(args):
     vendor_name = args.vendor
 
     if args.command == 'start':
+        if not vendor_name:
+            print(json.dumps({'error': '--vendor is required for start', 'choices': list(VENDOR_URLS)}))
+            sys.exit(1)
         cmd_start(vendor_name)
         return
 
@@ -102,15 +127,15 @@ async def run(args):
         return
 
     try:
-        async for vendor in get_vendor(vendor_name):
-            result = await dispatch(args, vendor)
+        async for resolved_name, vendor in get_vendor(vendor_name):
+            result = await dispatch(args, resolved_name, vendor)
             print(json.dumps(result, indent=2))
     except RuntimeError as e:
         print(json.dumps({'error': str(e)}))
         sys.exit(1)
 
 
-async def dispatch(args, vendor):
+async def dispatch(args, resolved_name: str, vendor):
     if args.command == 'search':
         products = await vendor.search(args.term, size=args.size)
         return [asdict(p) for p in products]
@@ -136,7 +161,8 @@ async def dispatch(args, vendor):
 
     if args.command == 'api':
         body = json.loads(args.body) if args.body else None
-        url = f'{VENDOR_URLS[args.vendor]}{args.path}' if args.path.startswith('/') else args.path
+        base = VENDOR_URLS[resolved_name]
+        url = f'{base}{args.path}' if args.path.startswith('/') else args.path
         return await vendor._fetch(args.method, url, body)
 
     raise RuntimeError(f'Unknown command: {args.command}')
@@ -144,7 +170,8 @@ async def dispatch(args, vendor):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='shopme', description='AI shopping assistant CLI')
-    parser.add_argument('--vendor', default='waitrose', choices=list(VENDOR_URLS))
+    parser.add_argument('--vendor', default=None, choices=list(VENDOR_URLS),
+                        help='Vendor to use (auto-detected from open tabs if omitted)')
 
     sub = parser.add_subparsers(dest='command', required=True)
 

@@ -1,6 +1,9 @@
-Help the user build and add a shopping list to their online grocery basket.
-
 ---
+name: shop
+description: Help the user build a shopping list and add items to their online grocery basket at Waitrose or Sainsbury's. Activate when the user asks to go shopping, add groceries, fill their basket, or mentions a list of food/household items they want to buy.
+---
+
+Help the user build and add a shopping list to their online grocery basket.
 
 ## Invoking the CLI
 
