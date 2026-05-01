@@ -1,0 +1,3 @@
+[mcp_servers.shopme]
+command = 'C:\dev\shopme\.conda\python.exe'
+args = ['C:\dev\shopme\shopme_mcp.py']

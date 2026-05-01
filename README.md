@@ -39,6 +39,41 @@ The agent will ask which supermarket you want, pull your order history and shopp
 
 ---
 
+## MCP server
+
+ShopMe can also run as a Model Context Protocol server. It exposes the normal
+shopping actions as MCP tools: search products, read the basket, add items, set
+quantities, clear the basket, list orders, read order detail, take screenshots,
+and read/write shopping memory.
+
+Run it directly over stdio:
+
+```bash
+.conda/python shopme_mcp.py
+```
+
+Example MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "shopme": {
+      "command": "C:\\dev\\shopme\\.conda\\python.exe",
+      "args": ["C:\\dev\\shopme\\shopme_mcp.py"],
+      "cwd": "C:\\dev\\shopme"
+    }
+  }
+}
+```
+
+Use `.conda/python shopme.py --vendor waitrose start` first, then log in in the
+Chrome window. The MCP tools use that live browser session, just like the CLI.
+The raw authenticated `api` command is not exposed by default; set
+`SHOPME_MCP_ENABLE_RAW_API=1` before starting the MCP server if you deliberately
+want that exploration tool available.
+
+---
+
 ## CLI reference
 
 You can also drive the CLI directly. All commands output JSON.

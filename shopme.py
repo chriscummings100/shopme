@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from dataclasses import asdict
+from typing import Any
 
 from playwright.async_api import async_playwright
 
@@ -28,6 +29,15 @@ CHROME_PATHS = [
 ]
 
 
+class ShopMeError(RuntimeError):
+    def __init__(self, message: str, **details: Any):
+        super().__init__(message)
+        self.details = details
+
+    def as_error(self) -> dict[str, Any]:
+        return {'error': str(self), **self.details}
+
+
 def find_chrome() -> str | None:
     for path in CHROME_PATHS:
         if os.path.exists(path):
@@ -35,24 +45,32 @@ def find_chrome() -> str | None:
     return None
 
 
-def cmd_start(vendor_name: str):
+def start_browser(vendor_name: str) -> dict[str, Any]:
+    if vendor_name not in VENDOR_URLS:
+        raise ShopMeError('Unknown vendor', choices=list(VENDOR_URLS))
     chrome = find_chrome()
     if not chrome:
-        print(json.dumps({'error': 'Chrome executable not found', 'searched': CHROME_PATHS}))
-        sys.exit(1)
+        raise ShopMeError('Chrome executable not found', searched=CHROME_PATHS)
     profile_dir = os.path.join(os.path.expanduser('~'), '.shopme-chrome')
     url = VENDOR_URLS[vendor_name]
     subprocess.Popen([chrome, '--remote-debugging-port=9222', f'--user-data-dir={profile_dir}', url])
-    print(json.dumps({'ok': True, 'cdp': CDP_URL, 'url': url}))
+    return {'ok': True, 'cdp': CDP_URL, 'url': url}
+
+
+def cmd_start(vendor_name: str):
+    result = start_browser(vendor_name)
+    print(json.dumps(result))
 
 
 async def get_vendor(vendor_name: str | None):
+    if vendor_name and vendor_name not in VENDOR_URLS:
+        raise ShopMeError('Unknown vendor', choices=list(VENDOR_URLS))
+
     async with async_playwright() as playwright:
         try:
             browser = await playwright.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
-            print(json.dumps({'error': f'Cannot connect to Chrome: {e}', 'hint': 'Run: python shopme.py start <vendor>'}))
-            sys.exit(1)
+            raise ShopMeError(f'Cannot connect to Chrome: {e}', hint='Run: python shopme.py start <vendor>')
 
         if vendor_name:
             host = VENDOR_URLS[vendor_name].replace('https://', '').replace('http://', '')
@@ -77,11 +95,15 @@ async def get_vendor(vendor_name: str | None):
                         if host in p.url:
                             matches.append((name, p))
             if not matches:
-                print(json.dumps({'error': 'No vendor site found in open tabs', 'hint': f'Open one of {list(VENDOR_URLS)} or run: python shopme.py start <vendor>'}))
-                sys.exit(1)
+                raise ShopMeError(
+                    'No vendor site found in open tabs',
+                    hint=f'Open one of {list(VENDOR_URLS)} or run: python shopme.py start <vendor>',
+                )
             if len(matches) > 1:
-                print(json.dumps({'error': f'Multiple vendor tabs open: {[m[0] for m in matches]}', 'hint': 'Use --vendor to specify which one'}))
-                sys.exit(1)
+                raise ShopMeError(
+                    f'Multiple vendor tabs open: {[m[0] for m in matches]}',
+                    hint='Use --vendor to specify which one',
+                )
             vendor_name, page = matches[0]
 
         if vendor_name == 'sainsburys':
@@ -95,13 +117,12 @@ async def get_vendor(vendor_name: str | None):
         yield vendor_name, vendor
 
 
-async def cmd_screenshot(url: str, output: str):
+async def screenshot_url(url: str, output: str) -> dict[str, str]:
     async with async_playwright() as playwright:
         try:
             browser = await playwright.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
-            print(json.dumps({'error': f'Cannot connect to Chrome: {e}'}))
-            sys.exit(1)
+            raise ShopMeError(f'Cannot connect to Chrome: {e}')
 
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
         page = await context.new_page()
@@ -111,7 +132,11 @@ async def cmd_screenshot(url: str, output: str):
         finally:
             await page.close()
 
-    print(json.dumps({'path': os.path.abspath(output)}))
+    return {'path': os.path.abspath(output)}
+
+
+async def cmd_screenshot(url: str, output: str):
+    print(json.dumps(await screenshot_url(url, output)))
 
 
 async def run(args):
@@ -121,7 +146,11 @@ async def run(args):
         if not vendor_name:
             print(json.dumps({'error': '--vendor is required for start', 'choices': list(VENDOR_URLS)}))
             sys.exit(1)
-        cmd_start(vendor_name)
+        try:
+            cmd_start(vendor_name)
+        except ShopMeError as e:
+            print(json.dumps(e.as_error()))
+            sys.exit(1)
         return
 
     if args.command == 'memory':
@@ -134,13 +163,20 @@ async def run(args):
         return
 
     if args.command == 'screenshot':
-        await cmd_screenshot(args.url, args.out)
+        try:
+            await cmd_screenshot(args.url, args.out)
+        except ShopMeError as e:
+            print(json.dumps(e.as_error()))
+            sys.exit(1)
         return
 
     try:
         async for resolved_name, vendor in get_vendor(vendor_name):
             result = await dispatch(args, resolved_name, vendor)
             print(json.dumps(result, indent=2))
+    except ShopMeError as e:
+        print(json.dumps(e.as_error()))
+        sys.exit(1)
     except RuntimeError as e:
         print(json.dumps({'error': str(e)}))
         sys.exit(1)

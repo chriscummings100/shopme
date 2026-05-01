@@ -32,6 +32,7 @@ This means agents only ever pass IDs they received back from a prior command —
 
 ```
 shopme.py            CLI entry point — all commands, argument parsing, CDP connection
+shopme_mcp.py        MCP server entry point — exposes shopping actions as MCP tools
 shopping_memory.py   Soft phrase-to-product memory for household associations
 .shopme-memory/      Local memory event log and summary (gitignored)
 vendors/
@@ -52,6 +53,24 @@ scripts/
 requirements.txt     playwright, pytest, pytest-asyncio
 pytest.ini           asyncio_mode=auto, unit/integration markers
 ```
+
+---
+
+## MCP server
+
+Run `shopme_mcp.py` to expose ShopMe over stdio using the Python MCP SDK:
+
+```bash
+.conda/python shopme_mcp.py
+```
+
+It exposes the safe shopping surface as tools: `start_browser`, `search_products`,
+`get_cart`, `add_to_cart`, `set_cart_quantity`, `clear_cart`, `list_orders`,
+`get_order`, `screenshot_page`, and memory read/write tools. It also exposes
+shopping memory summaries as resources under `shopme://memory/summary`.
+
+The raw authenticated `api` command is intentionally not registered as an MCP
+tool unless `SHOPME_MCP_ENABLE_RAW_API=1` is set before the server starts.
 
 ---
 
