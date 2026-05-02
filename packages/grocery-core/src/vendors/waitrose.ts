@@ -345,15 +345,17 @@ export class WaitroseVendor implements ShoppingVendor {
     const order = result.body ?? {};
     const rawItems = arrayOfRecords(order.orderLines);
     const nameMap = rawItems.length > 0
-      ? await this.lookupNames(rawItems.map((line) => String(line.lineNumber)))
+      ? await this.lookupNames(rawItems.map((line) => idOrNull(line.lineNumber)).filter(isString))
       : {};
 
     const items: OrderItem[] = rawItems.map((line) => {
-      const info = nameMap[String(line.lineNumber)] ?? {};
+      const lineNumber = idOrNull(line.lineNumber);
+      const rawProductId = idOrNull(line.productId);
+      const info = lineNumber ? nameMap[lineNumber] ?? {} : {};
       const unit = line.estimatedUnitPrice?.amount;
       const total = line.estimatedTotalPrice?.amount;
       return {
-        line_number: String(line.lineNumber),
+        product_id: lineNumber && rawProductId ? encodeWaitroseProductId(lineNumber, rawProductId) : lineNumber,
         name: stringOrNull(info.name),
         size: stringOrNull(info.size),
         qty: numberOrNull(line.quantity?.amount),
@@ -434,6 +436,14 @@ function arrayOfRecords(value: unknown): AnyRecord[] {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function idOrNull(value: unknown): string | null {
+  return value === undefined || value === null || value === "" ? null : String(value);
+}
+
+function isString(value: string | null): value is string {
+  return value !== null;
 }
 
 function numberOrNull(value: unknown): number | null {

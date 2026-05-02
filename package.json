@@ -2,7 +2,28 @@
   "name": "shopme-workspace",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "author": "Chris Cummings",
+  "homepage": "https://github.com/chriscummings100/shopme#readme",
+  "bugs": {
+    "url": "https://github.com/chriscummings100/shopme/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chriscummings100/shopme.git"
+  },
+  "keywords": [
+    "grocery",
+    "shopping",
+    "mcp",
+    "cli",
+    "waitrose",
+    "sainsburys"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "workspaces": [
     "packages/*",
     "servers/*"

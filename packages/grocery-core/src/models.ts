@@ -36,7 +36,7 @@ export interface Order {
 }
 
 export interface OrderItem {
-  line_number: string;
+  product_id: string | null;
   name: string | null;
   size: string | null;
   qty: number | null;

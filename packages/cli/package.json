@@ -2,12 +2,33 @@
   "name": "@chriscummings100/shopme",
   "version": "0.1.0",
   "description": "ShopMe grocery basket CLI.",
+  "license": "MIT",
+  "author": "Chris Cummings",
+  "homepage": "https://github.com/chriscummings100/shopme#readme",
+  "bugs": {
+    "url": "https://github.com/chriscummings100/shopme/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chriscummings100/shopme.git",
+    "directory": "packages/cli"
+  },
+  "keywords": [
+    "grocery",
+    "shopping",
+    "cli",
+    "waitrose",
+    "sainsburys"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "files": [
     "dist"
   ],
   "bin": {
-    "shopme": "./dist/index.js"
+    "shopme": "dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

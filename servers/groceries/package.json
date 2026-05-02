@@ -2,12 +2,33 @@
   "name": "@chriscummings100/shopme-mcp-groceries",
   "version": "0.1.0",
   "description": "ShopMe groceries MCP server.",
+  "license": "MIT",
+  "author": "Chris Cummings",
+  "homepage": "https://github.com/chriscummings100/shopme#readme",
+  "bugs": {
+    "url": "https://github.com/chriscummings100/shopme/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chriscummings100/shopme.git",
+    "directory": "servers/groceries"
+  },
+  "keywords": [
+    "grocery",
+    "shopping",
+    "mcp",
+    "waitrose",
+    "sainsburys"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "dist"
   ],
   "bin": {
-    "shopme-mcp-groceries": "./dist/index.js"
+    "shopme-mcp-groceries": "dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

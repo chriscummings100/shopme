@@ -361,7 +361,7 @@ export class SainsburysVendor implements ShoppingVendor {
       const product = item.product ?? {};
       const subtotal = item.sub_total;
       return {
-        line_number: String(product.product_uid ?? ""),
+        product_id: idOrNull(product.product_uid),
         name: stringOrNull(product.name),
         size: null,
         qty: numberOrNull(item.quantity),
@@ -448,6 +448,10 @@ function arrayOfRecords(value: unknown): AnyRecord[] {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function idOrNull(value: unknown): string | null {
+  return value === undefined || value === null || value === "" ? null : String(value);
 }
 
 function numberOrNull(value: unknown): number | null {

@@ -2,7 +2,26 @@
   "name": "@chriscummings100/shopme-shared",
   "version": "0.1.0",
   "description": "Shared helpers for ShopMe packages.",
+  "license": "MIT",
+  "author": "Chris Cummings",
+  "homepage": "https://github.com/chriscummings100/shopme#readme",
+  "bugs": {
+    "url": "https://github.com/chriscummings100/shopme/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chriscummings100/shopme.git",
+    "directory": "packages/shared"
+  },
+  "keywords": [
+    "grocery",
+    "shopping",
+    "shopme"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "dist"
   ],
