@@ -14,10 +14,10 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@shopme/shared": [
+      "@chriscummings100/shopme-shared": [
         "packages/shared/src/index.ts"
       ],
-      "@shopme/grocery-core": [
+      "@chriscummings100/shopme-grocery-core": [
         "packages/grocery-core/src/index.ts"
       ]
     }

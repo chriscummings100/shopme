@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { stringifySorted, withoutNullish } from "@shopme/shared";
+import { stringifySorted, withoutNullish } from "@chriscummings100/shopme-shared";
 import {
   EVENTS_FILE,
   MEMORY_ENV,

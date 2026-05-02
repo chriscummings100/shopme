@@ -1,7 +1,11 @@
 {
-  "name": "@shopme/grocery-core",
+  "name": "@chriscummings100/shopme-grocery-core",
   "version": "0.1.0",
+  "description": "Core browser, vendor, cart, order, and shopping memory behavior for ShopMe.",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,10 +16,14 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@shopme/shared": "0.1.0",
+    "@chriscummings100/shopme-shared": "0.1.0",
     "playwright-core": "^1.56.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

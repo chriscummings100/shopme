@@ -56,7 +56,7 @@ export async function connectToChrome(cdpUrl = CDP_URL): Promise<Browser> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new ShopMeError(`Cannot connect to Chrome: ${message}`, {
-      hint: "Run: npx @shopme/cli --vendor waitrose start"
+      hint: "Run: npx -y @chriscummings100/shopme --vendor waitrose start"
     });
   }
 }

@@ -8,7 +8,7 @@ import {
   explain,
   recordAssociation,
   recordRejection
-} from "@shopme/grocery-core";
+} from "@chriscummings100/shopme-grocery-core";
 
 let memoryDir: string;
 

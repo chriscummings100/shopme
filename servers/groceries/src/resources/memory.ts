@@ -1,6 +1,6 @@
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { VENDOR_NAMES, buildSummary, isVendorName } from "@shopme/grocery-core";
+import { VENDOR_NAMES, buildSummary, isVendorName } from "@chriscummings100/shopme-grocery-core";
 
 export function registerMemoryResources(server: McpServer): void {
   server.registerResource(

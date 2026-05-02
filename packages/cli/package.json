@@ -1,7 +1,11 @@
 {
-  "name": "@shopme/cli",
+  "name": "@chriscummings100/shopme",
   "version": "0.1.0",
+  "description": "ShopMe grocery basket CLI.",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "bin": {
     "shopme": "./dist/index.js"
   },
@@ -16,11 +20,15 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev": "tsx src/index.ts",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@shopme/grocery-core": "0.1.0",
-    "@shopme/shared": "0.1.0",
+    "@chriscummings100/shopme-grocery-core": "0.1.0",
+    "@chriscummings100/shopme-shared": "0.1.0",
     "commander": "^14.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

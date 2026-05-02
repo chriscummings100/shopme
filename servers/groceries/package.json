@@ -1,7 +1,11 @@
 {
-  "name": "@shopme/mcp-groceries",
+  "name": "@chriscummings100/shopme-mcp-groceries",
   "version": "0.1.0",
+  "description": "ShopMe groceries MCP server.",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "bin": {
     "shopme-mcp-groceries": "./dist/index.js"
   },
@@ -16,11 +20,15 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev": "tsx src/index.ts",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",
-    "@shopme/grocery-core": "0.1.0",
+    "@chriscummings100/shopme-grocery-core": "0.1.0",
     "zod": "^3.25.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -45,7 +45,7 @@ export async function resolveVendor(vendorName?: VendorName | null): Promise<Res
 
       if (matches.length === 0) {
         throw new ShopMeError("No vendor site found in open tabs", {
-          hint: `Open one of ${JSON.stringify([...VENDOR_NAMES])} or run: npm exec --workspace @shopme/cli -- shopme --vendor waitrose start`
+          hint: `Open one of ${JSON.stringify([...VENDOR_NAMES])} or run: npm exec --workspace @chriscummings100/shopme -- shopme --vendor waitrose start`
         });
       }
 

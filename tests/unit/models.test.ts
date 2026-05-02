@@ -7,7 +7,7 @@ import {
   encodeSainsburysCartItemId,
   encodeWaitroseCartItemId,
   encodeWaitroseProductId
-} from "@shopme/grocery-core";
+} from "@chriscummings100/shopme-grocery-core";
 
 test("Waitrose product id round trips", () => {
   const encoded = encodeWaitroseProductId("123456", "prod-789abc");

@@ -13,8 +13,8 @@ import {
   startBrowser,
   type HttpMethod,
   type VendorName
-} from "@shopme/grocery-core";
-import { printJson } from "@shopme/shared";
+} from "@chriscummings100/shopme-grocery-core";
+import { printJson } from "@chriscummings100/shopme-shared";
 
 type GlobalOptions = {
   vendor?: string;

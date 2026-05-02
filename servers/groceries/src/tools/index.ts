@@ -11,7 +11,7 @@ import {
   screenshotUrl,
   startBrowser,
   type VendorName
-} from "@shopme/grocery-core";
+} from "@chriscummings100/shopme-grocery-core";
 
 const vendorSchema = z.enum(VENDOR_NAMES);
 const httpMethodSchema = z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]);

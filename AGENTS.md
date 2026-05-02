@@ -1,203 +1,163 @@
-# ShopMe — Agent Guide
+# ShopMe - Agent Guide
 
-ShopMe is migrating from a Python CLI/MCP server to a TypeScript npm workspace. It lets an AI agent add items to Waitrose and Sainsbury's online grocery baskets by attaching to a running Chrome session via the Chrome DevTools Protocol and driving the retailers' own internal APIs using the session's live authentication tokens. The Python implementation remains available during the migration.
+ShopMe is a TypeScript npm workspace for controlling a user's online grocery
+basket through a live Chrome session. It exposes both a CLI and an MCP server.
 
----
+The project supports Waitrose and Sainsbury's.
 
-## How it works
+## Current Structure
 
-### Browser attachment
-
-The user runs Chrome with `--remote-debugging-port=9222` (via `shopme.py start`). The CLI connects using Playwright's `connect_over_cdp`, finds the vendor tab, and calls `page.evaluate()` to run `fetch()` calls inside that tab. Because the requests originate from inside the tab, they carry the real cookies automatically.
-
-### Authentication
-
-Waitrose's SPA uses a short-lived Bearer token. On startup, `_init_context` extracts it from SSR `<script>` elements embedded in the page HTML via regex (`/"accessToken":"(Bearer [^"]+)"/`). It also installs a `window.fetch` hook to capture any fresher token the SPA issues itself. On a 401, the CLI reloads the page, re-runs `_init_context`, and retries once.
-
-### Opaque IDs
-
-Callers never see Waitrose's internal field names. The CLI encodes composite keys:
-
-| Exposed field | Internal encoding |
-|---|---|
-| `product.id` | `"lineNumber:productId"` |
-| `cart_item.cart_item_id` | `"trolleyItemId:uom"` |
-| `order.order_id` | `customerOrderId` (opaque, passed through as-is) |
-
-This means agents only ever pass IDs they received back from a prior command — no need to understand the underlying data model.
-
----
-
-## File structure
-
-```
-shopme.py            CLI entry point — all commands, argument parsing, CDP connection
-shopme_mcp.py        MCP server entry point — exposes shopping actions as MCP tools
-shopping_memory.py   Soft phrase-to-product memory for household associations
-.shopme-memory/      Local memory event log and summary (gitignored)
-vendors/
-  base.py            Abstract ShoppingVendor class + shared dataclasses
-  waitrose.py        Waitrose implementation
+```text
+packages/
+  grocery-core/
+    src/browser/          Chrome launch, CDP connection, screenshots
+    src/memory/           Shopping memory event log and summary builder
+    src/vendors/          Vendor abstraction and concrete vendors
+    src/models.ts         Shared product/cart/order models
+    src/vendor-registry.ts
+  cli/
+    src/index.ts          `shopme` CLI
+  shared/
+    src/                  Small JSON/path helpers
+servers/
+  groceries/
+    src/index.ts          `shopme-mcp-groceries` stdio entry point
+    src/tools/            MCP tool registration
+    src/resources/        MCP resource registration
 tests/
-  conftest.py        pytest fixtures (vendor, clean_cart)
-  test_phase1_env.py Environment checks (no browser needed)
-  test_phase2_core.py CDP connection and context extraction
-  test_phase3_unit.py ID encoding roundtrips, dataclass fields (no browser)
-  test_phase3_int.py  Full integration tests (requires live session)
-.claude/
-  commands/shop.md       /shop skill — AI shopping assistant
-  commands/smoke-test.md /smoke-test skill — 7-step CLI smoke test
-  commands/api-spy.md    /api-spy skill — network traffic reverse-engineering
-scripts/
-  network_filter.py  Preprocessor for api-spy raw network dumps
-requirements.txt     playwright, pytest, pytest-asyncio
-pytest.ini           asyncio_mode=auto, unit/integration markers
+  unit/                   Vitest unit tests
 ```
 
----
+## Browser Attachment
 
-## MCP server
-
-Run the TypeScript groceries MCP server over stdio with:
+The user launches Chrome with remote debugging through:
 
 ```bash
-npm exec --workspace @shopme/mcp-groceries -- shopme-mcp-groceries
+npm exec --workspace @chriscummings100/shopme -- shopme --vendor waitrose start
 ```
 
-Legacy Python remains available with:
+or:
 
 ```bash
-.conda/python shopme_mcp.py
+npm exec --workspace @chriscummings100/shopme -- shopme --vendor sainsburys start
 ```
 
-It exposes the safe shopping surface as tools: `start_browser`, `search_products`,
-`get_cart`, `add_to_cart`, `set_cart_quantity`, `clear_cart`, `list_orders`,
-`get_order`, `screenshot_page`, and memory read/write tools. It also exposes
-shopping memory summaries as resources under `shopme://memory/summary`.
+The CLI and MCP server connect to `http://localhost:9222` using
+`playwright-core`, find the supported vendor tab, and evaluate `fetch()` calls
+inside that page so requests carry the real browser cookies and tokens.
 
-The raw authenticated `api` command is intentionally not registered as an MCP
-tool unless `SHOPME_MCP_ENABLE_RAW_API=1` is set before the server starts.
+If exactly one supported vendor tab is open, commands can omit `--vendor`. If
+both are open, pass `--vendor waitrose` or `--vendor sainsburys`.
 
----
+## MCP Server
 
-## CLI reference
+Local MCP command:
 
-Run TypeScript commands with `npm exec --workspace @shopme/cli -- shopme <command>`.
-Legacy Python commands remain available with `.conda/python shopme.py <command>`.
-All output is JSON on stdout. Errors print `{"error": "..."}` and exit 1.
+```text
+command = "node"
+args = ["C:\\dev\\shopme\\servers\\groceries\\dist\\index.js"]
+```
+
+Alternative batch launcher:
+
+```text
+command = "C:\\Windows\\System32\\cmd.exe"
+args = ["/c", "C:\\dev\\shopme\\runmcp.bat"]
+```
+
+The groceries MCP server exposes:
+
+- `start_browser`
+- `search_products`
+- `get_cart`
+- `add_to_cart`
+- `set_cart_quantity`
+- `clear_cart`
+- `list_orders`
+- `get_order`
+- `screenshot_page`
+- `memory_summary`
+- `memory_explain`
+- `memory_record`
+- `memory_reject`
+
+It exposes memory resources under `shopme://memory/summary` and
+`shopme://memory/summary/{vendor}`.
+
+The raw authenticated API tool is disabled unless `SHOPME_MCP_ENABLE_RAW_API=1`
+is set before server startup.
+
+## CLI Reference
+
+Run commands with:
+
+```bash
+npm exec --workspace @chriscummings100/shopme -- shopme <command>
+```
+
+All output is JSON on stdout. Errors print `{"error":"..."}` and exit non-zero.
 
 | Command | Description |
 |---|---|
-| `start` | Launch Chrome with `--remote-debugging-port=9222` |
-| `search <term> [--size N]` | Search for products. Returns array of `{id, name, size, price, price_per_unit, promotion}` |
-| `cart` | Show the basket. Returns `{items, total, savings}` |
-| `add <product_id> [qty]` | Add a product. `product_id` from `search`. Returns updated cart |
-| `set <cart_item_id> <qty>` | Update quantity. `qty=0` removes the item. Returns updated cart |
-| `clear` | Empty the basket. Returns empty cart |
-| `orders [--size N]` | List past/active orders. Returns array of `{order_id, status, placed_date, delivery_date, total, item_count}` |
-| `order <order_id>` | Full order detail. Returns `{order_id, status, ..., items[]}` |
-| `screenshot <url> [--out PATH]` | Open URL in a new tab, screenshot it, close the tab. Saves to `screenshot.png` by default |
+| `start` | Launch Chrome with remote debugging; requires `--vendor` |
+| `search <term> [--size N]` | Search products |
+| `cart` | Show current basket |
+| `add <product_id> [qty]` | Add a product using an ID from `search` |
+| `set <cart_item_id> <qty>` | Update quantity; `qty=0` removes the item |
+| `clear` | Empty the basket |
+| `orders [--size N]` | List recent and active orders |
+| `order <order_id>` | Full order detail |
+| `screenshot <url> [--out PATH]` | Screenshot a URL using the live Chrome session |
 | `api <METHOD> <path> [body]` | Raw authenticated API call for exploration |
-| `memory summary [--vendor V]` | Show compact soft associations for the agent. Does not need Chrome |
-| `memory record ...` | Record that an original phrase resolved to a product |
-| `memory reject ...` | Record that an original phrase did not mean a product |
-| `memory explain <phrase>` | Show memory evidence for one phrase |
+| `memory summary [--vendor V]` | Show compact shopping memory |
+| `memory record ...` | Record that a phrase resolved to a product |
+| `memory reject ...` | Record a correction |
+| `memory explain <phrase>` | Show evidence for one phrase |
 
----
+## Shopping Memory
 
-## Shopping memory
+Memory is stored in `.shopme-memory/associations.jsonl` and
+`.shopme-memory/summary.json`. This is personal household data and is ignored by
+git.
 
-`shopping_memory.py` stores an append-only log in `.shopme-memory/associations.jsonl`
-and writes a compact `.shopme-memory/summary.json`. This is personal household
-data and is ignored by git.
+Memory is intentionally soft. The shopping workflow should use it as evidence,
+not as a permanent definition. Repeated successful resolutions increase score;
+corrections push bad associations down and record the preferred product when
+known.
 
-Memory is intentionally soft. The `/shop` workflow loads `memory summary` up
-front, uses it to rank or suggest products, and records the final product after
-an ambiguous phrase is resolved. Repeated successful resolutions increase the
-score. Corrections use `memory reject` to push bad associations down and record
-the preferred product when known.
+## Vendor Abstraction
 
-Example:
-
-```bash
-.conda/python shopme.py memory summary --vendor waitrose
-.conda/python shopme.py memory record --vendor waitrose --phrase "d.yogurts" --product-id "<id>" --product-name "Little Yeos Strawberry Yogurts 6x45g" --search-term "kids strawberry yogurts"
-.conda/python shopme.py memory reject --vendor waitrose --phrase "cuke" --wrong-product-name "Coca-Cola Original Taste 2L" --correct-product-name "Essential Cucumber Each"
-```
-
----
-
-## Vendor abstraction
-
-`vendors/base.py` defines `ShoppingVendor` (abstract base class) and the shared dataclasses.
+`packages/grocery-core/src/vendors/base.ts` defines `ShoppingVendor`.
 
 | Vendor | Module | Site |
 |---|---|---|
-| Waitrose | `vendors/waitrose.py` | `https://www.waitrose.com` |
-| Sainsbury's | `vendors/sainsburys.py` | `https://www.sainsburys.co.uk` |
+| Waitrose | `packages/grocery-core/src/vendors/waitrose.ts` | `https://www.waitrose.com` |
+| Sainsbury's | `packages/grocery-core/src/vendors/sainsburys.ts` | `https://www.sainsburys.co.uk` |
 
-The correct vendor is auto-detected from whichever vendor site is open in the browser. If both are open, pass `--vendor waitrose` or `--vendor sainsburys` to disambiguate. Only `start` requires `--vendor` explicitly.
+To add a vendor:
 
-To add a new vendor:
+1. Create `packages/grocery-core/src/vendors/<name>.ts`.
+2. Implement `ShoppingVendor`.
+3. Add the vendor to `VENDOR_NAMES` in `models.ts`.
+4. Add the vendor URL to `VENDOR_URLS` in `vendors/catalog.ts`.
+5. Add a construction branch in `vendor-registry.ts`.
 
-1. Create `vendors/<name>.py` with a class inheriting `ShoppingVendor`
-2. Implement all seven abstract methods: `search`, `get_cart`, `add`, `set_qty`, `clear`, `get_orders`, `get_order`
-3. Add the vendor URL to `VENDOR_URLS` in `shopme.py`
-4. Add a branch for it in `get_vendor()` in `shopme.py`
+The CLI, MCP server, and shopping skill should not need vendor-specific changes.
 
-The CLI caller and agent skills never need to change.
-
----
-
-## Running tests
+## Tests
 
 ```bash
-# Unit tests only (no browser required)
-.conda/python -m pytest -m unit
-
-# All tests (requires Chrome running and logged in to Waitrose)
-.conda/python -m pytest
-
-# Integration tests only
-.conda/python -m pytest -m integration
+npm run typecheck
+npm run build
+npm run test:unit
 ```
 
-Integration tests skip automatically if Chrome isn't running or the user isn't logged in.
+Live supermarket smoke tests require Chrome to be running and logged in.
 
----
+## Agent Rules
 
-## Claude skills
-
-| Skill | Trigger | What it does |
-|---|---|---|
-| `/shop` | User wants to add items to their basket | Gathers memory, order history and current cart, takes a free-form shopping list, searches and adds each item decisively |
-| `/smoke-test` | Verify the CLI is working end-to-end | Runs 7 steps (cart, search, add, set qty, remove, orders, order detail) and reports PASS/FAIL |
-| `/api-spy` | Reverse-engineer a new website's API | Opens an isolated browser context, captures network traffic, analyses auth patterns, writes `api-spy-output/api_analysis.md` |
-
----
-
-## Prerequisites
-
-- Chrome installed (Windows/Mac/Linux paths auto-detected)
-- `.conda/python` — the project's conda environment with `playwright` and `pytest-asyncio` installed
-- Playwright browsers: `playwright install chromium` (only needed if not using `connect_over_cdp`)
-- For all vendor commands: Chrome must be running with `--remote-debugging-port=9222` and the Waitrose tab logged in
-# TypeScript migration note
-
-The forward implementation is now an npm workspace:
-
-- `packages/grocery-core` owns browser attachment, vendor implementations,
-  shared models, opaque ID helpers, screenshot support, and shopping memory.
-- `packages/cli` exposes the `shopme` bin.
-- `servers/groceries` exposes the `shopme-mcp-groceries` MCP server bin.
-- `packages/shared` contains small shared JSON/path helpers.
-
-After `npm install` and `npm run build`, use:
-
-```bash
-npm exec --workspace @shopme/cli -- shopme memory summary --vendor waitrose
-npm exec --workspace @shopme/cli -- shopme --vendor waitrose start
-npm exec --workspace @shopme/mcp-groceries -- shopme-mcp-groceries
-```
-
-The Python implementation remains as the compatibility path during migration.
+- Do not read `.shopme-memory/associations.jsonl` unless the task requires
+  memory debugging; it contains personal household data.
+- Do not empty the basket unless explicitly asked.
+- Product and cart item IDs are opaque. Pass back IDs exactly as returned.
+- Keep stdout clean for MCP protocol traffic. Diagnostics should go to stderr.

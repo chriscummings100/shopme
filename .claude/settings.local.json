@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "mcp__shopme__search_products",
+      "mcp__shopme__start_browser"
     ]
   }
 }
