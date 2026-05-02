@@ -1,0 +1,29 @@
+{
+  "name": "shopme-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "servers/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @shopme/shared && npm run build --workspace @shopme/grocery-core && npm run build --workspace @shopme/cli && npm run build --workspace @shopme/mcp-groceries",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "dev:cli": "tsx packages/cli/src/index.ts",
+    "dev:mcp:grocery": "tsx servers/groceries/src/index.ts"
+  },
+  "dependencies": {
+    "@shopme/cli": "0.1.0",
+    "@shopme/mcp-groceries": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

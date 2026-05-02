@@ -1,4 +1,7 @@
 node_modules/
+.npm-cache/
+dist/
+coverage/
 api-spy-output/
 *.map
 *.har

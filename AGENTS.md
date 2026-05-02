@@ -1,6 +1,6 @@
 # ShopMe — Agent Guide
 
-ShopMe is a Python CLI that lets an AI agent add items to a Waitrose online grocery basket. It attaches to a running Chrome session via the Chrome DevTools Protocol and drives the retailer's own internal APIs using the session's live authentication tokens.
+ShopMe is migrating from a Python CLI/MCP server to a TypeScript npm workspace. It lets an AI agent add items to Waitrose and Sainsbury's online grocery baskets by attaching to a running Chrome session via the Chrome DevTools Protocol and driving the retailers' own internal APIs using the session's live authentication tokens. The Python implementation remains available during the migration.
 
 ---
 
@@ -58,7 +58,13 @@ pytest.ini           asyncio_mode=auto, unit/integration markers
 
 ## MCP server
 
-Run `shopme_mcp.py` to expose ShopMe over stdio using the Python MCP SDK:
+Run the TypeScript groceries MCP server over stdio with:
+
+```bash
+npm exec --workspace @shopme/mcp-groceries -- shopme-mcp-groceries
+```
+
+Legacy Python remains available with:
 
 ```bash
 .conda/python shopme_mcp.py
@@ -76,7 +82,9 @@ tool unless `SHOPME_MCP_ENABLE_RAW_API=1` is set before the server starts.
 
 ## CLI reference
 
-Run all commands with `.conda/python shopme.py <command>`. All output is JSON on stdout. Errors print `{"error": "..."}` and exit 1.
+Run TypeScript commands with `npm exec --workspace @shopme/cli -- shopme <command>`.
+Legacy Python commands remain available with `.conda/python shopme.py <command>`.
+All output is JSON on stdout. Errors print `{"error": "..."}` and exit 1.
 
 | Command | Description |
 |---|---|
@@ -174,3 +182,22 @@ Integration tests skip automatically if Chrome isn't running or the user isn't l
 - `.conda/python` — the project's conda environment with `playwright` and `pytest-asyncio` installed
 - Playwright browsers: `playwright install chromium` (only needed if not using `connect_over_cdp`)
 - For all vendor commands: Chrome must be running with `--remote-debugging-port=9222` and the Waitrose tab logged in
+# TypeScript migration note
+
+The forward implementation is now an npm workspace:
+
+- `packages/grocery-core` owns browser attachment, vendor implementations,
+  shared models, opaque ID helpers, screenshot support, and shopping memory.
+- `packages/cli` exposes the `shopme` bin.
+- `servers/groceries` exposes the `shopme-mcp-groceries` MCP server bin.
+- `packages/shared` contains small shared JSON/path helpers.
+
+After `npm install` and `npm run build`, use:
+
+```bash
+npm exec --workspace @shopme/cli -- shopme memory summary --vendor waitrose
+npm exec --workspace @shopme/cli -- shopme --vendor waitrose start
+npm exec --workspace @shopme/mcp-groceries -- shopme-mcp-groceries
+```
+
+The Python implementation remains as the compatibility path during migration.

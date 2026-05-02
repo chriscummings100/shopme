@@ -1,344 +1,375 @@
-# ShopMe - Project Plan
+# ShopMe TypeScript Migration Plan
 
-AI-powered shopping assistant for Waitrose, driven by a Python CLI and Playwright.
+This plan proposes moving ShopMe from a Python CLI plus Python MCP server to a
+TypeScript-based project that can be launched with `npx` and can grow into a
+collection of MCP servers over time.
 
-## Architecture
+## Implementation Status
 
-```
-Claude (shop skill)
-  → Bash: python shopme.py <command>
-    → Playwright (connect_over_cdp)
-      → Chrome (--remote-debugging-port=9222, persistent profile)
-        → waitrose.com tab (real cookies, authenticated)
-          → page.evaluate(fetch(...))   ← looks like user-typed JS to server
-```
+As of 2026-05-02:
 
-### Why this approach
+- Phase 1 is implemented with npm workspaces, package-local TypeScript configs,
+  root scripts, and build/test tooling.
+- Phases 2 and 3 are implemented in `packages/grocery-core`, including shared
+  models, errors, ID helpers, and a compatible TypeScript shopping memory port.
+- Phases 4 and 5 have initial TypeScript ports for browser attachment,
+  screenshots, Waitrose, and Sainsbury's. Live supermarket smoke tests are still
+  needed before retiring the Python implementation.
+- Phase 6 is implemented as the `@shopme/cli` package with a `shopme` bin.
+- Phase 7 is implemented as the `@shopme/mcp-groceries` package with a
+  `shopme-mcp-groceries` bin and the equivalent safe tool/resource surface.
+- Phase 8 is partially implemented through README updates and an npm-based
+  `runmcp.bat`.
+- Phase 9 remains pending.
 
-- **No MCP server**: Claude invokes the CLI directly via Bash — simpler, no long-running process to manage.
-- **No Chrome extension**: Playwright's `page.evaluate()` does exactly what the extension's `fetch_from_tab` did, with no reconnect issues.
-- **No API key / credentials file**: The browser tab's real cookie session handles auth. Same-origin fetches include cookies automatically — no JWT extraction or Android API key needed.
-- **Persistent Chrome profile** (`~/.shopme-chrome`): login survives between sessions; doesn't conflict with the user's normal Chrome.
+## Goals
 
-## File Structure
+- Rebuild the project in TypeScript and run it on Node.js.
+- Launch the CLI and MCP server through npm package bins, including `npx`.
+- Preserve the current safe shopping surface and JSON CLI behavior.
+- Keep the current `.shopme-memory` data format compatible.
+- Restructure the repository so the groceries MCP server is the first server in
+  a broader collection, not a one-off entry point.
+- Keep vendor logic independent from MCP transport details.
 
-```
-shopme.py              ← CLI entry point: argument parsing, vendor dispatch
-requirements.txt       ← playwright
-vendors/
-  base.py              ← abstract vendor interface + shared data models
-  waitrose.py          ← Waitrose implementation
-  sainsburys.py        ← future
-.claude/
-  commands/
-    shop.md            ← skill: instructs Claude to use shopme.py via Bash
-    api-spy.md         ← unchanged, still useful for adding new vendors
-api-spy-output/        ← API reference docs, keep
-```
+## Non-Goals
 
-## CLI Commands
+- Do not change the authenticated-browser model yet. ShopMe should still attach
+  to the user's Chrome session over CDP and use the live supermarket tab.
+- Do not expose the raw authenticated API as a default MCP tool.
+- Do not rewrite shopping memory semantics unless the TypeScript port uncovers a
+  compatibility issue.
+- Do not merge all future MCP servers into one large server process by default.
 
-All commands output JSON to stdout. Claude parses and acts on this.
-Select vendor with `--vendor <name>` (default: `waitrose`).
+## Proposed Repository Structure
 
-| Command | Description |
-|---|---|
-| `shopme.py start` | Launch Chrome with debug port, open vendor homepage |
-| `shopme.py search <term> [--size N]` | Search products → list with opaque `id` |
-| `shopme.py cart` | Current basket → items with opaque `cart_item_id` |
-| `shopme.py add <product_id> [qty]` | Add item (id from search results) |
-| `shopme.py set <cart_item_id> <qty>` | Update quantity; qty=0 removes the item |
-| `shopme.py clear` | Empty basket |
-| `shopme.py orders [--size N]` | List past/active orders |
-| `shopme.py order <order_id>` | Full item list for a past order |
-| `shopme.py api <METHOD> <path> [body]` | Raw vendor API call (exploration) |
+```text
+shopme/
+  package.json
+  tsconfig.base.json
+  README.md
 
-### Design principle: opaque IDs
+  packages/
+    grocery-core/
+      package.json
+      src/
+        browser/
+          chrome.ts
+          screenshot.ts
+        memory/
+          index.ts
+          scoring.ts
+          store.ts
+        vendors/
+          base.ts
+          waitrose.ts
+          sainsburys.ts
+        errors.ts
+        models.ts
+        vendor-registry.ts
 
-IDs returned by the CLI are opaque strings. Claude passes them back as-is — it never
-needs to understand their internal structure. Vendor implementations encode whatever
-the underlying API needs into a single string:
+    cli/
+      package.json
+      src/
+        index.ts
+        commands/
+          browser.ts
+          cart.ts
+          memory.ts
+          orders.ts
+          products.ts
 
-- `search` returns `product.id` — Waitrose encodes `"lineNumber:productId"` internally
-- `cart` returns `item.cart_item_id` — Waitrose uses `trolleyItemId`
-- `add <product_id>` unpacks the encoded ID internally; no extra API lookup needed
-- `set <cart_item_id> <qty>` similarly resolves lineNumber/productId from the cart lookup
+    shared/
+      package.json
+      src/
+        json.ts
+        paths.ts
 
-## Implementation Plan
+  servers/
+    groceries/
+      package.json
+      src/
+        index.ts
+        server.ts
+        tools/
+          browser.ts
+          cart.ts
+          memory.ts
+          orders.ts
+          products.ts
+        resources/
+          memory.ts
 
-### Test structure
+    api-spy/
+      package.json
+      src/
+        index.ts
 
-```
-tests/
-  conftest.py          ← fixtures shared across all phases
-  test_phase1_env.py   ← gates Phase 1
-  test_phase2_core.py  ← gates Phase 2
-  test_phase3_unit.py  ← gates Phase 3 (no browser)
-  test_phase3_int.py   ← gates Phase 3 (browser + login required)
-```
+  tests/
+    unit/
+    integration/
+    fixtures/
 
-**Markers** (configured in `pytest.ini`):
-- `unit` — no browser needed, always fast
-- `integration` — requires Chrome running and logged in to Waitrose
-
-Run unit only: `pytest -m unit`
-Run all (including integration): `pytest -m "unit or integration"`
-
-**Key fixtures** (`conftest.py`):
-- `vendor` — async fixture: connects via CDP, finds Waitrose page, returns a
-  `WaitroseVendor` instance ready to use
-- `clean_cart` — depends on `vendor`; yields, then calls `vendor.clear()` on
-  teardown. Apply to any test that modifies the basket.
-
----
-
-### Phase 1 — Environment setup
-
-- Create `requirements.txt` with `playwright` and `pytest-asyncio`
-- `pip install -r requirements.txt && playwright install chromium`
-- Verify Chrome can launch with `--remote-debugging-port=9222`
-- Confirm `connect_over_cdp` can attach
-
-**Gate tests** (`test_phase1_env.py`) — all `unit`, no browser needed:
-
-| Test | Asserts |
-|---|---|
-| `test_chrome_executable_found` | Chrome binary exists at the detected path |
-| `test_playwright_chromium_installed` | Playwright's chromium executable path exists on disk |
-| `test_cdp_endpoint_reachable` | `GET http://localhost:9222/json` returns HTTP 200 (needs Chrome already running) |
-
----
-
-### Phase 2 — `shopme.py` core infrastructure
-
-**2a. `start` command**
-Find Chrome executable (standard Windows/Mac/Linux paths), launch with
-`--remote-debugging-port=9222 --user-data-dir=~/.shopme-chrome`, open waitrose.com.
-Print `{"ok": true}` and exit.
-
-**2b. CDP connection + page finder**
-`async def get_waitrose_page(playwright)` — connect via `connect_over_cdp`,
-scan all contexts/pages for one whose URL contains `waitrose.com`.
-If none found, open a new tab and navigate there.
-
-**2c. Session context extraction**
-`async def get_context(page)` — evaluate `localStorage.getItem('wtr_customer_id')`
-and `localStorage.getItem('wtr_order_id')` in the Waitrose tab.
-
-**2d. Generic fetch wrapper**
-`async def page_fetch(page, method, url, body=None)` — `page.evaluate()` with a JS
-async function that calls `fetch(url, {method, headers, body})` in the tab context.
-Same-origin cookies are included automatically.
-
-> **Auth open question:** Test early whether cookies alone are sufficient for the
-> GraphQL and REST endpoints, or whether a Bearer token also needs to be extracted
-> from the page (e.g. from `window.__PRELOADED_STATE__`). The old extension
-> extracted a JWT — the web context may not need it.
-
-**Gate tests** (`test_phase2_core.py`):
-
-| Test | Marker | Asserts |
-|---|---|---|
-| `test_connect_over_cdp` | integration | Playwright connects without raising |
-| `test_find_waitrose_page` | integration | Returns a page object whose URL contains `waitrose.com` |
-| `test_get_context_returns_ids` | integration | `customerId` and `orderId` are non-empty strings |
-| `test_page_fetch_returns_200` | integration | Authenticated GET to `/api/order-orchestration-prod/v1/orders?size=1` returns status 200 |
-
----
-
-### Phase 3 — Vendor base class + Waitrose implementation
-
-**`vendors/base.py`** — abstract interface all vendors implement:
-
-```python
-class ShoppingVendor:
-    async def search(self, term: str, size: int) -> list[Product]
-    async def get_cart(self) -> Cart
-    async def add(self, product_id: str, qty: int) -> Cart
-    async def set_qty(self, cart_item_id: str, qty: int) -> Cart  # qty=0 = remove
-    async def clear(self) -> Cart
-    async def get_orders(self, size: int) -> list[Order]
-    async def get_order(self, order_id: str) -> Order
-
-@dataclass class Product:
-    id: str; name: str; size: str | None; price: str
-    price_per_unit: str | None; promotion: str | None
-
-@dataclass class CartItem:
-    cart_item_id: str; product_id: str; name: str; qty: int; price: str
-
-@dataclass class Cart:
-    items: list[CartItem]; total: str; savings: str | None
+  scripts/
 ```
 
-**`vendors/waitrose.py`** — port each operation from `host/src/index.ts`:
+## Package Boundaries
 
-- `search` — POST to search endpoint; encode `"lineNumber:productId"` as `product.id`
-- `get_cart` — GraphQL `getTrolley` + products lookup; `trolleyItemId` as `cart_item_id`
-- `add` — unpack `lineNumber:productId` from product_id; GraphQL `addItemToTrolley`
-- `set_qty` — fetch cart internally to resolve lineNumber/productId for the given
-  trolleyItemId, then GraphQL `updateTrolleyItem`
-- `clear` — GraphQL `emptyTrolley`, re-read localStorage for new orderId
-- `get_orders` — `GET /api/order-orchestration-prod/v1/orders`
-- `get_order` — `GET /api/order-orchestration-prod/v1/orders/{id}` + products lookup
+### `packages/grocery-core`
 
-**Gate tests — unit** (`test_phase3_unit.py`), no browser:
+Owns all supermarket behavior and local memory behavior.
 
-| Test | Asserts |
-|---|---|
-| `test_product_id_roundtrip` | Encoding then decoding `lineNumber:productId` recovers both values |
-| `test_product_fields` | `Product` dataclass has `id`, `name`, `size`, `price`, `price_per_unit`, `promotion` |
-| `test_cart_item_fields` | `CartItem` has `cart_item_id`, `product_id`, `name`, `qty`, `price` |
-| `test_cart_fields` | `Cart` has `items`, `total`, `savings` |
-| `test_vendor_interface` | `WaitroseVendor` implements all abstract methods of `ShoppingVendor` |
+Responsibilities:
 
-**Gate tests — integration** (`test_phase3_int.py`), needs logged-in browser:
+- Chrome discovery and launch.
+- CDP connection via Playwright.
+- Vendor tab detection.
+- Vendor abstraction and concrete vendor implementations.
+- Opaque ID encoding and decoding.
+- Product, cart, order, and order-detail models.
+- Shopping memory event log and summary generation.
+- Screenshot helper using the live Chrome session.
 
-| Test | Uses `clean_cart` | Asserts |
-|---|---|---|
-| `test_search_returns_products` | no | Non-empty list; each item has `id`, `name`, `price` as non-empty strings |
-| `test_search_id_is_opaque_string` | no | `product.id` is a non-empty string (internals not visible to caller) |
-| `test_cart_returns_shape` | no | `Cart` with `items` list and non-empty `total` string |
-| `test_add_item` | yes | After `add`, product appears in `get_cart()` results |
-| `test_add_returns_updated_cart` | yes | `add` return value is a `Cart` with the new item present |
-| `test_set_qty_changes_quantity` | yes | After `set_qty(id, 2)`, item qty is 2 in `get_cart()` |
-| `test_set_qty_zero_removes_item` | yes | After `set_qty(id, 0)`, item absent from `get_cart()` |
-| `test_orders_returns_list` | no | Non-empty list; each order has `order_id`, `status`, `total` |
-| `test_order_detail_has_items` | no | Fetch first order from history; `items` list is non-empty with `name` and `price` |
+This package must not depend on the MCP SDK.
 
----
+### `packages/cli`
 
-### Phase 4 — Skill rewrite (`shop.md`)
+Owns the human/debug CLI.
 
-Shopping logic unchanged (decisiveness, order history, confirmations).
-Replace each MCP tool call with `Bash: python shopme.py <command>`.
-Add startup check: if `shopme.py context` fails, tell user to run `shopme.py start`.
+Responsibilities:
 
----
+- Parse command-line arguments.
+- Call `grocery-core`.
+- Print JSON to stdout.
+- Print errors as JSON and exit non-zero.
+- Preserve command names where practical:
+  - `start`
+  - `search`
+  - `cart`
+  - `add`
+  - `set`
+  - `clear`
+  - `orders`
+  - `order`
+  - `screenshot`
+  - `api`
+  - `memory summary`
+  - `memory record`
+  - `memory reject`
+  - `memory explain`
 
-### Phase 5 — Cleanup
+### `servers/groceries`
 
-- Delete `host/`, `extension/`, `scripts/build.mjs`, `tsconfig.json`, `credentials.json`
-- Remove shopme entry from `.claude/mcp.json`
-- Swap MCP tool permissions in `settings.local.json` for Bash `python shopme.py *`
-- Retire or rewrite `smoke-test.md`
+Owns the MCP server for shopping.
 
-## Waitrose API Reference
+Responsibilities:
 
-Discovered via Chrome DevTools Network capture. Base URL: `https://www.waitrose.com`.
+- Create and run the groceries MCP server over stdio.
+- Register safe shopping tools.
+- Register memory resources.
+- Keep stdout reserved for MCP protocol traffic.
+- Send diagnostics to stderr only.
+- Keep raw API disabled unless explicitly enabled with an environment variable.
 
-### Auth (web context)
+### Future `servers/*`
 
-All authenticated requests are made inside the Waitrose browser tab, so cookies
-are applied automatically. Custom headers the web app sends:
+Each future MCP server should be a separate package with its own `package.json`
+and bin entry. Shared code belongs in `packages/*`; server-specific transport and
+tool registration belongs in `servers/<name>`.
 
-- `Content-Type: application/json`
-- `features: enAppleWallet`
-- `breadcrumb` (value varies — may not be required)
+## npx Launch Strategy
 
-orderId: read from `localStorage.wtr_order_id`.
-customerId: read from `localStorage.wtr_customer_id`.
-
-After `emptyTrolley`, re-read `localStorage.wtr_order_id` — a new orderId is issued.
-
-### Product Search
-
-`POST /api/content-prod/v2/cms/publish/productcontent/search/{customerId}?clientType=WEB_APP`
+The CLI package should expose:
 
 ```json
 {
-  "customerSearchRequest": {
-    "queryParams": {
-      "size": 10,
-      "searchTerm": "milk",
-      "sortBy": "MOST_POPULAR",
-      "searchTags": [],
-      "filterTags": [],
-      "orderId": "<orderId>",
-      "categoryLevel": 1
+  "bin": {
+    "shopme": "./dist/index.js"
+  }
+}
+```
+
+The groceries MCP server package should expose:
+
+```json
+{
+  "bin": {
+    "shopme-mcp-groceries": "./dist/index.js"
+  }
+}
+```
+
+Example CLI usage:
+
+```bash
+npx @your-scope/shopme --vendor waitrose start
+npx @your-scope/shopme search "semi skimmed milk" --size 5
+npx @your-scope/shopme cart
+```
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "shopme-groceries": {
+      "command": "npx",
+      "args": ["-y", "@your-scope/shopme-mcp-groceries"]
     }
   }
 }
 ```
 
-Sort values: `MOST_POPULAR`, `PRICE_LOW_TO_HIGH`, `PRICE_HIGH_TO_LOW`, `RATING`
+For local development, use workspace commands:
 
-Response: `componentsAndProducts[]` — filter to entries with `searchProduct`.
-Key fields: `id`, `lineNumber`, `name`, `size`, `displayPrice`, `displayPriceQualifier`,
-`promotion.promotionDescription`, `defaultQuantity.uom`.
-
-### Trolley — Get
-
-`POST /api/graphql-prod/graph/live`
-
-```graphql
-query($orderId: ID!) {
-  getTrolley(orderId: $orderId) {
-    trolley {
-      trolleyItems {
-        trolleyItemId lineNumber productId
-        quantity { amount uom }
-        totalPrice { amount currencyCode }
-      }
-      trolleyTotals {
-        itemTotalEstimatedCost { amount currencyCode }
-        savingsFromOffers { amount currencyCode }
-      }
-    }
-  }
-}
+```bash
+npm run build
+npm run test
+npm run dev:cli -- search "milk"
+npm run dev:mcp:grocery
 ```
 
-### Trolley — Add Item
+## Tooling
 
-```graphql
-mutation($orderId: ID!, $trolleyItem: TrolleyItemInput) {
-  addItemToTrolley(orderId: $orderId, trolleyItem: $trolleyItem) {
-    trolley { trolleyTotals { itemTotalEstimatedCost { amount currencyCode } } }
-    failures { message type }
-  }
-}
+Recommended dependencies:
+
+- `typescript`
+- `tsx` for local development
+- `tsup` for building executable ESM output
+- `vitest` for unit tests
+- `playwright-core` for CDP connection without bundling browsers
+- `commander` or `yargs` for CLI parsing
+- `zod` for MCP tool input schemas and runtime validation
+- MCP TypeScript SDK packages for server implementation
+
+Use `playwright-core` rather than full `playwright` because ShopMe connects to
+the user's installed Chrome over CDP.
+
+## Migration Phases
+
+### Phase 1: Workspace Skeleton
+
+- Add root `package.json` with npm workspaces.
+- Add `tsconfig.base.json`.
+- Add package folders for `grocery-core`, `cli`, and `servers/groceries`.
+- Add build, typecheck, test, and dev scripts.
+- Keep the Python implementation working during this phase.
+
+### Phase 2: Core Models and Errors
+
+- Port dataclasses from `vendors/base.py` into TypeScript interfaces.
+- Port `ShopMeError`.
+- Port opaque ID helpers into explicit functions with tests.
+- Add unit tests for model shape and ID round trips.
+
+### Phase 3: Shopping Memory
+
+- Port `shopping_memory.py` into `packages/grocery-core/src/memory`.
+- Preserve `.shopme-memory/associations.jsonl`.
+- Preserve `.shopme-memory/summary.json`.
+- Preserve `SHOPME_MEMORY_DIR`.
+- Add compatibility tests against existing fixture events.
+
+This is the safest first functional port because it does not require Chrome.
+
+### Phase 4: Browser and Vendor Resolution
+
+- Port Chrome executable discovery.
+- Port `start_browser`.
+- Port CDP connection using Playwright.
+- Port vendor tab auto-detection.
+- Port screenshot support.
+- Add integration tests that skip cleanly when Chrome is unavailable.
+
+### Phase 5: Vendor Implementations
+
+- Port Waitrose first.
+- Port Sainsbury's second.
+- Keep request behavior as close to Python as possible.
+- Keep token extraction and refresh behavior equivalent.
+- Preserve exposed opaque IDs.
+- Add unit tests for parsing helpers and integration tests for live sessions.
+
+### Phase 6: TypeScript CLI
+
+- Implement the TypeScript CLI against `grocery-core`.
+- Preserve JSON stdout.
+- Preserve error format: `{ "error": "..." }`.
+- Preserve command names and arguments where practical.
+- Add a temporary side-by-side comparison script that runs Python and TypeScript
+  commands for memory and non-mutating browser calls.
+
+### Phase 7: Groceries MCP Server
+
+- Port `shopme_mcp.py` to `servers/groceries`.
+- Register equivalent tools:
+  - `start_browser`
+  - `search_products`
+  - `get_cart`
+  - `add_to_cart`
+  - `set_cart_quantity`
+  - `clear_cart`
+  - `list_orders`
+  - `get_order`
+  - `screenshot_page`
+  - memory read/write tools
+- Register equivalent resources:
+  - `shopme://memory/summary`
+  - `shopme://memory/summary/{vendor}`
+- Gate `raw_api` behind an environment variable.
+- Verify stdio remains protocol-clean.
+
+### Phase 8: Switch Launch Paths
+
+- Replace `runmcp.bat` with an `npx`-based launcher or remove it from the
+  recommended setup.
+- Update README and AGENTS instructions.
+- Update MCP client configuration examples.
+- Keep old Python instructions in a migration note until TypeScript is proven.
+
+### Phase 9: Remove Python
+
+- Remove Python entry points once TypeScript integration tests and smoke tests
+  cover the same behavior.
+- Archive or delete `requirements.txt`, `pytest.ini`, and Python tests after
+  TypeScript equivalents exist.
+- Keep any useful reverse-engineering scripts either ported or clearly marked as
+  legacy.
+
+## Compatibility Checklist
+
+- Existing `.shopme-memory` files still load.
+- Existing product IDs returned by search can be added during the same session.
+- Existing cart item IDs returned by cart can be passed to set quantity.
+- Vendor auto-detection still works when exactly one vendor tab is open.
+- `--vendor` still disambiguates multiple open vendor tabs.
+- Browser launch still uses a persistent `~/.shopme-chrome` profile.
+- MCP tool names remain stable.
+- Raw API remains opt-in.
+- Integration tests skip cleanly without a logged-in browser.
+
+## Risks and Mitigations
+
+- MCP SDK API churn: isolate MCP SDK usage inside `servers/groceries`.
+- Browser/CDP differences: port browser helpers early and test against a live
+  session before porting every vendor method.
+- Accidental memory incompatibility: use fixture-based tests against existing
+  `.shopme-memory` event lines.
+- stdout pollution in MCP: centralize logging and use stderr for diagnostics.
+- Large rewrite risk: keep Python and TypeScript side by side until the
+  TypeScript CLI and MCP server pass smoke tests.
+
+## Suggested First Implementation Slice
+
+1. Create the npm workspace and TypeScript build setup.
+2. Port shopping memory.
+3. Add tests for memory summary, explain, record, and reject.
+4. Add the `shopme` CLI bin for memory-only commands.
+5. Confirm this works with:
+
+```bash
+npx @your-scope/shopme memory summary --vendor waitrose
 ```
 
-Variables: `trolleyItem: { lineNumber, productId, quantity: { amount, uom }, trolleyItemId: -parseInt(lineNumber) }`
-
-`trolleyItemId` for a **new** item is the **negative of its lineNumber** as an integer.
-Adding an existing item (by lineNumber) resets its quantity rather than incrementing.
-
-### Trolley — Update / Remove Item
-
-Same mutation as Add but `updateTrolleyItem`, using the real positive `trolleyItemId`
-from getTrolley. Also requires `canSubstitute: true, personalisedMessage: null`.
-Set `quantity.amount: 0` to remove. The CLI resolves `lineNumber` and `productId`
-from the trolley internally — callers only need to supply `trolleyItemId`.
-
-### Trolley — Empty
-
-```graphql
-mutation($orderId: ID!) {
-  emptyTrolley(orderId: $orderId) { trolley { orderId } }
-}
-```
-
-### Products Lookup (for enriching trolley/order items with names)
-
-`GET /api/products-prod/v1/products/{lineNumbers}?view=SUMMARY`
-
-`lineNumbers` is a `+`-separated list (URL-encoded as `%2B`).
-Response: `products[]` with `lineNumber`, `name`, `size`.
-
-### Other Endpoints
-
-- `GET /api/order-orchestration-prod/v1/orders?size=15&sortBy=%2B&statuses=AMENDING%2BFULFIL%2BPAID%2BPAYMENT_FAILED%2BPICKED%2BPLACED` — order history
-- `GET /api/order-orchestration-prod/v1/orders/{orderId}` — order detail (`.orderLines[]`)
-- `GET /api/delivery-pass-orchestration-prod/v1/pass/status` — delivery pass status
-- `GET /api/slot-orchestration-prod/v1/slot-reservations?customerOrderId={orderId}` — delivery slot
-- `GET /api/memberships-prod/v2/memberships` — MyWaitrose membership
-- `GET /api/favourites2-prod/v2/favourites?includes=bought-online%2Cuser-selected` — favourites
-
-## Known Gotchas
-
-- **Adding existing item**: `addItemToTrolley` resets quantity rather than incrementing. Use `updateTrolleyItem` to change an existing item's quantity.
-- **orderId after emptyTrolley**: New orderId appears in `localStorage.wtr_order_id` after the mutation completes — re-read it.
-- **Chrome profile**: Always use `--user-data-dir=~/.shopme-chrome` so login persists. Do not use the default profile (Chrome ≥ v136 may not support CDP on it).
-- **Page not open**: If no waitrose.com tab is found, the CLI should navigate to it and wait for the user to log in before proceeding.
+That first slice proves package layout, npx launch, TypeScript tests, and
+backward-compatible local data handling without touching live supermarket APIs.
