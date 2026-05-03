@@ -86,25 +86,30 @@ export class WaitroseVendor implements ShoppingVendor {
         };
       }
 
+      const clean = (value: unknown): string => {
+        const text = typeof value === 'string' ? value : '';
+        return text === 'undefined' || text === 'null' ? '' : text;
+      };
+
       const ctx = {
-        customerId: localStorage.getItem('wtr_customer_id') || '',
-        orderId: localStorage.getItem('wtr_order_id') || '',
-        token: shopWindow.__shopmeToken__ || ''
+        customerId: clean(localStorage.getItem('wtr_customer_id')),
+        orderId: clean(localStorage.getItem('wtr_order_id')),
+        token: clean(shopWindow.__shopmeToken__)
       };
 
       for (const script of Array.from(document.querySelectorAll('script'))) {
         const text = script.textContent || '';
         if (!ctx.token) {
           const m = text.match(/"accessToken":"(Bearer [^"]+)"/);
-          if (m) ctx.token = m[1];
+          if (m) ctx.token = clean(m[1]);
         }
         if (!ctx.orderId) {
           const m = text.match(/"customerOrderId":"([^"]+)"/);
-          if (m) ctx.orderId = m[1];
+          if (m) ctx.orderId = clean(m[1]);
         }
         if (!ctx.customerId) {
           const m = text.match(/"customerId":"([^"]+)"/);
-          if (m) ctx.customerId = m[1];
+          if (m) ctx.customerId = clean(m[1]);
         }
         if (ctx.token && ctx.orderId && ctx.customerId) break;
       }
@@ -389,7 +394,7 @@ export class WaitroseVendor implements ShoppingVendor {
     const request: [string, string, unknown, string] = [method, url, body ?? null, this.token];
     let result = await this.page.evaluate(fetchInPage, request) as FetchResult;
     if (result.status === 401) {
-      await this.page.reload({ waitUntil: "networkidle" });
+      await this.page.reload({ waitUntil: "domcontentloaded" });
       await this.initContext();
       const retryRequest: [string, string, unknown, string] = [method, url, body ?? null, this.token];
       result = await this.page.evaluate(fetchInPage, retryRequest) as FetchResult;
